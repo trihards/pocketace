@@ -19,7 +19,7 @@ test('episode lookup → draft render → MP4', { timeout: 120e3 }, async () => 
   const site = await startFixtureSite();
   const port = 18000 + Math.floor(Math.random() * 1000);
   const srv = spawn('node', ['server.js'], {
-    cwd: ROOT, env: { ...process.env, PORT: String(port), ALLOWED_HOSTS: '127.0.0.1', WORK_DIR: mkdtempSync(path.join(os.tmpdir(), 'pocketace-e2e-')) }, stdio: 'pipe',
+    cwd: ROOT, env: { ...process.env, PORT: String(port), ALLOWED_HOSTS: '127.0.0.1', WORK_DIR: mkdtempSync(path.join(os.tmpdir(), 'pocketace-e2e-')), DATA_DIR: mkdtempSync(path.join(os.tmpdir(), 'pocketace-e2e-data-')) }, stdio: 'pipe',
   });
   const api = `http://127.0.0.1:${port}`;
   try {

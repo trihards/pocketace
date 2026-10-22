@@ -75,8 +75,13 @@
     <details class="step" id="step-photos" open>
       <summary><h2><span class="n">3</span> Photos</h2><span class="sum" id="sum-photos"></span></summary>
       <div class="body">
-        <p class="hint">Tap photos to add them to your story. Tap again to take one out.</p>
-        <div id="gallery" class="gallery"><p class="empty">Photos from the episode page appear here.</p></div>
+        <div class="photos-head">
+          <p class="hint">Tap photos to add them to your story. Tap again to take one out. You can drop your own photos here too.</p>
+          <button type="button" id="import-photos" class="primary">Add photos…</button>
+          <input id="import-files" type="file" accept="image/jpeg,image/png,image/webp,image/heic,image/heif,.jpg,.jpeg,.png,.webp,.heic,.heif" multiple hidden>
+        </div>
+        <p id="import-status" class="status" role="status" aria-live="polite"></p>
+        <div id="gallery" class="gallery"><p class="empty">Photos from the episode page appear here. To add your own, drop them here or use Add photos.</p></div>
         <form id="add-photo" class="row">
           <input id="photo-url" type="url" placeholder="Add a photo by its web address" aria-label="Photo address">
           <button type="submit">Add</button>

@@ -40,7 +40,7 @@ The server checks FFmpeg when it starts (the result is in its first line of outp
 Or with Docker:
 
 ```sh
-docker build -t pocketace . && docker run -p 8080:8080 pocketace
+docker build -t pocketace . && docker run -p 8080:8080 -v pocketace-data:/app/data pocketace   # the volume keeps imported photos
 ```
 
 ## Configuration (environment variables)
@@ -51,6 +51,7 @@ docker build -t pocketace . && docker run -p 8080:8080 pocketace
 | `ALLOWED_HOSTS` | `acedoutpodcast.com,squarespace-cdn.com,squarespace.com,amazonaws.com` | The only hosts the server will fetch from (subdomains included). Add the audio host here if episodes live elsewhere. |
 | `JOB_TTL_HOURS` | `6` | Rendered videos and downloaded media are deleted after this long |
 | `WORK_DIR` | system temp | Scratch space. Wiped on start. |
+| `DATA_DIR` | `./data` | Imported photos live in `uploads/` here. Kept across restarts; not in git. |
 | `FFMPEG_PATH` | (search) | Use this FFmpeg. `ffprobe` is taken from the same folder, or from `FFPROBE_PATH`. |
 
 ## How it works
@@ -77,18 +78,34 @@ Files worth knowing:
 - `public/captions.js`: SRT/VTT parsing, clipping to the excerpt, SRT output.
 - `lib/render.js`: the FFmpeg command builder. Each render writes its final FFmpeg arguments to `ffmpeg-final-args.json` in the job folder, for debugging.
 - `lib/extract.js`: episode lookup. Every finding records which source it came from.
+- `lib/photos.js`: reads a file's real type and its EXIF orientation from its bytes.
 - `lib/ffmpeg.js`: finds a complete FFmpeg and explains what's missing when there isn't one. Also behind `npm run doctor`.
 - `public/app.js`: the editor: excerpt range bar, story strip (drag, keyboard: arrows choose, Option/Alt+arrows move, Delete removes), preview, autosave.
 
+## Photos from your computer
+
+**Add photos…** in the Photos section opens the file picker, or drop photos anywhere on that section (several at once is fine). JPEG, PNG and WebP are taken as they are. HEIC, the iPhone's format, works from Safari, which can open it: PocketAce turns it into a full-size JPEG before sending it. Other browsers can't open HEIC, so they explain that and how to export a JPEG from Photos instead.
+
+Imported photos sit at the end of the gallery with a small "Yours" tag and are used exactly like the website's: tap to add, drag on the strip, preview, render. Hover one (or look at its corner on a touch screen) for **✕** to take it out of the project; if it's in the story, PocketAce asks first.
+
+Where they go: each file is sent once to the PocketAce server and kept, untouched and at full resolution, in `data/uploads/` (or `$DATA_DIR/uploads`), named by a fingerprint of its contents (SHA-256). The saved project only records that name, so a refresh, a restored session or a restart of the server finds the same file, and the same photo imported twice is stored once. A small upright thumbnail is made next to it for the gallery. Phone photos stored sideways with an EXIF "rotate" tag are shown and rendered the right way up.
+
+Limits:
+
+- Taking a photo out of the project doesn't delete its file (another project in another browser may use it). Clearing out `data/uploads/` is safe whenever no project needs those photos; any that do then show as **Missing**, and the story says which.
+- 60 MB per file.
+- Once PocketAce is hosted, anyone who can open its address can add files to that folder. Fine for a private address; something to close before it's public.
+
 ## Saved work
 
-The project autosaves a third of a second after every change, in the browser's `localStorage` under the key `pocketace.project.v1`: episode address and title, the photos the lookup found, audio address, start and end, the story in order, guest name and line underneath, draft/final choice, which sections are open, and a captions file's text if one is loaded. Reloading or reopening the page puts all of it back. **Start over** (top right) clears it. The header shows when it last saved.
+The project autosaves a third of a second after every change, in the browser's `localStorage` under the key `pocketace.project.v1`: episode address and title, the gallery (the photos the lookup found, and the addresses of photos you imported), audio address, start and end, the story in order, guest name and line underneath, draft/final choice, which sections are open, and a captions file's text if one is loaded. Reloading or reopening the page puts all of it back. **Start over** (top right) clears it. The header shows when it last saved.
 
 Limits, all from living in one browser:
 
 - One project at a time, on one browser on one computer. Safari and Chrome on the same Mac each have their own; so do `localhost:8080` and `localhost:3000`.
 - Clearing website data, or a private window, loses it.
 - Safari deletes script-written storage for a site that hasn't been used for 7 days of Safari use (WebKit's tracking prevention). A project left alone for a week or more may be gone.
+- Imported photos themselves are on the server, not in the browser, so they outlast all of the above (see Photos from your computer).
 - Rendered videos are not saved: download the MP4 (the server deletes renders after `JOB_TTL_HOURS`).
 
 The step past this is one small JSON file on the server (a `GET`/`PUT /api/project` pair). It would survive browser cleanups and the 7-day rule, but once PocketAce is hosted, everyone who can open the address shares and overwrites that one project until there is some form of login. That's why it isn't built yet.
@@ -101,6 +118,6 @@ The step past this is one small JSON file on the server (a `GET`/`PUT /api/proje
 
 ## Not in this prototype (on purpose)
 
-Accounts, a media library, uploads from disk, publishing to YouTube, a caption editor, waveform display, adjustable photo durations, more than one saved project. See the findings report for what to build next and what to defer.
+Accounts, a media library (beyond importing stills), video clips, publishing to YouTube, a caption editor, waveform display, adjustable photo durations, more than one saved project. See the findings report for what to build next and what to defer.
 
 Fonts: Archivo and Shrikhand, both SIL Open Font License (see `assets/fonts/`).

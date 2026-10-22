@@ -3,16 +3,22 @@
 // Ends by rendering the arranged story and checking the MP4.
 //
 //   npm i --no-save playwright && npx playwright install webkit   (once)
-//   node tools/ui-check.js [--browser webkit|chromium] [--quality draft|final] [--episode URL]
+//   node tools/ui-check.js [--browser webkit|chromium] [--quality draft|final] [--episode URL] [--heic FILE]
+//
+// Imported photos are generated on the fly (a 4032×3024 sideways phone JPEG,
+// a PNG, a WebP). For HEIC it uses --heic, or makes one with macOS's `sips`;
+// without either, that check is skipped. It uses a throwaway data folder, so
+// nothing lands in the real data/uploads.
 //
 // WebKit is Safari's engine. Needs FFmpeg as for `npm start` (`npm run doctor`).
 
 import { spawn, execFileSync } from 'node:child_process';
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, readFileSync, readdirSync, existsSync, rmSync, mkdirSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { tools } from '../lib/ffmpeg.js';
+import { withOrientation } from '../test/images.js';
 
 const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const arg = (name, dflt) => { const i = process.argv.indexOf(`--${name}`); return i > 0 ? process.argv[i + 1] : dflt; };
@@ -33,7 +39,23 @@ if (!episode) {
 
 const port = 18900 + Math.floor(Math.random() * 90);
 const work = mkdtempSync(path.join(os.tmpdir(), 'pocketace-ui-'));
-const srv = spawn('node', ['server.js'], { cwd: ROOT, env: { ...process.env, PORT: String(port), WORK_DIR: work }, stdio: ['ignore', 'pipe', 'inherit'] });
+const data = path.join(work, 'data');
+const srv = spawn('node', ['server.js'], { cwd: ROOT, env: { ...process.env, PORT: String(port), WORK_DIR: work, DATA_DIR: data }, stdio: ['ignore', 'pipe', 'inherit'] });
+
+// Photos "on Ace's computer".
+const mine = path.join(work, 'mine');
+mkdirSync(mine, { recursive: true });
+const make = (name, src, extra = []) => { execFileSync(ffmpeg, ['-v', 'error', '-y', '-f', 'lavfi', '-i', src, '-frames:v', '1', ...extra, path.join(mine, name)]); return path.join(mine, name); };
+const phone = make('IMG_4410.JPG', 'color=red:s=2016x1512[a];color=lime:s=2016x1512[b];color=blue:s=2016x1512[c];color=white:s=2016x1512[d];[a][b]hstack[t];[c][d]hstack[u];[t][u]vstack', ['-q:v', '2']);
+writeFileSync(phone, withOrientation(readFileSync(phone), 6)); // stored landscape, shown portrait: 3024×4032
+const studio = make('studio.png', 'mandelbrot=s=2400x1600:start_scale=0.4');
+const hasWebp = execFileSync(ffmpeg, ['-hide_banner', '-encoders']).toString().includes('libwebp');
+const bars = make(hasWebp ? 'bars.webp' : 'bars.png', 'smptehdbars=s=1600x1200');
+const portrait = make('portrait.jpg', 'testsrc2=s=1800x2400', ['-q:v', '3']);
+let heic = arg('heic');
+if (!heic && process.platform === 'darwin') {
+  try { heic = path.join(mine, 'IMG_4411.HEIC'); execFileSync('sips', ['-s', 'format', 'heic', portrait, '--out', heic], { stdio: 'ignore' }); } catch { heic = null; }
+}
 await new Promise((r) => srv.stdout.on('data', (b) => String(b).includes('PocketAce on') && r()));
 const base = `http://localhost:${port}`;
 
@@ -115,7 +137,42 @@ try {
   for (const i of [0, 3, 5, 7, 9, 11]) await page.locator('#gallery .thumb').nth(i).click();
   check((await page.textContent('#sum-photos')).startsWith('6 selected ·'), 'photos summary', await page.textContent('#sum-photos'));
   check((await page.textContent('#sum-story')) === '6 photos · 5:04 total', 'story summary', await page.textContent('#sum-story'));
+
+  // ---- Photos from the computer ----
+  await page.setInputFiles('#import-files', [phone, studio, bars]);
+  await page.waitForFunction(() => /^Added 3 photos/.test(document.querySelector('#import-status').textContent), null, { timeout: 60000 });
+  const imported = await page.evaluate(() => window.pocketace.library.filter((p) => p.local));
+  check(imported.length === 3 && (await page.locator('#gallery .gitem.local').count()) === 3, 'Add photos imports several files into the gallery', await page.textContent('#import-status'));
+  const ph = imported.find((p) => p.name === 'IMG_4410.JPG');
+  check(ph.width === 3024 && ph.height === 4032, 'a sideways phone photo keeps its full resolution, upright', `${ph.width}×${ph.height}`);
+  const stored = Buffer.from(await (await fetch(base + ph.url)).arrayBuffer());
+  check(stored.equals(readFileSync(phone)), 'the original file is stored unchanged', `${(stored.length / 1e6).toFixed(1)} MB`);
+  // Drag and drop: one new photo, and one already imported.
+  const dropFiles = [portrait, studio].map((f) => ({ name: path.basename(f), type: f.endsWith('.png') ? 'image/png' : 'image/jpeg', b64: readFileSync(f).toString('base64') }));
+  await page.locator('#step-photos').scrollIntoViewIfNeeded();
+  await page.evaluate((files) => {
+    const dt = new DataTransfer();
+    for (const f of files) dt.items.add(new File([Uint8Array.from(atob(f.b64), (c) => c.charCodeAt(0))], f.name, { type: f.type }));
+    const target = document.querySelector('#gallery');
+    for (const type of ['dragenter', 'dragover', 'drop']) target.dispatchEvent(new DragEvent(type, { dataTransfer: dt, bubbles: true, cancelable: true }));
+  }, dropFiles);
+  await page.waitForFunction(() => /Added 1 photo/.test(document.querySelector('#import-status').textContent), null, { timeout: 60000 });
+  check((await page.textContent('#import-status')).includes('already in the gallery'), 'dropping photos adds them; a repeat is recognised', await page.textContent('#import-status'));
+  if (heic && existsSync(heic)) {
+    await page.setInputFiles('#import-files', [heic]);
+    await page.waitForFunction(() => !/Adding/.test(document.querySelector('#import-status').textContent), null, { timeout: 60000 });
+    const msg = await page.textContent('#import-status');
+    const conv = await page.evaluate(() => window.pocketace.library.find((p) => p.local && p.name.startsWith('IMG_4411')));
+    check(conv ? conv.width >= 1000 && conv.url.endsWith('.jpg') : /HEIC photo \(Apple's format\).*Safari/.test(msg), `HEIC: ${conv ? 'converted to a full-size JPEG' : 'friendly explanation in this browser'}`, conv ? `${conv.width}×${conv.height}` : msg.slice(0, 90));
+  } else console.log('SKIP  HEIC (no sample; pass --heic FILE)');
+  const thumbsOk = await page.$$eval('#gallery .gitem.local img', (imgs) => imgs.every((i) => i.complete && i.naturalWidth > 0));
+  check(thumbsOk, 'imported photos show thumbnails');
+  // Put two imported photos in the story: the phone photo and the PNG.
+  const gIndex = (name) => page.evaluate((n) => window.pocketace.library.findIndex((p) => p.name === n), name);
+  await page.locator('#gallery .thumb').nth(await gIndex('IMG_4410.JPG')).click();
+  await page.locator('#gallery .thumb').nth(await gIndex('studio.png')).click();
   const original = await storyUrls();
+  check(original.length === 8 && original.slice(-2).every((u) => u.startsWith('/uploads/')), 'imported photos join the story like any other');
 
   // ---- Arrange: drag tile 1 to between tiles 3 and 4 ----
   await page.locator('#strip-wrap').scrollIntoViewIfNeeded();
@@ -129,7 +186,8 @@ try {
   let order = await storyUrls();
   check(JSON.stringify(order) === JSON.stringify([original[1], original[2], original[0], ...original.slice(3)]), 'drag moves photo 1 to position 3');
   const stripOrder = await page.$$eval('#strip .tile', (ts) => ts.map((t) => t.style.backgroundImage));
-  check(stripOrder.every((bg, i) => bg.includes(order[i].split('?')[0])), 'strip shows the new order');
+  // Website tiles show the photo at a small size, imported ones their thumbnail: compare what both keep.
+  check(stripOrder.every((bg, i) => bg.includes(order[i].split('?')[0].replace(/\.(jpg|png|webp|gif)$/, ''))), 'strip shows the new order');
   const badges = await page.$$eval('#gallery .thumb', (ts) => ts.map((t) => t.querySelector('.badge')?.textContent ?? null));
   check(badges[0] === '3', 'gallery badge follows the move', `first photo now badge ${badges[0]}`);
   const layerOrder = await page.evaluate(() => [...document.querySelectorAll('#layers .layer .fg img')].map((i) => i.getAttribute('src')));
@@ -143,7 +201,7 @@ try {
   await page.click('#move-later');
   order = await storyUrls();
   check(order[2] === original[0], '"Later" button moves it back');
-  check(await page.$eval('#sel-info', (n) => n.textContent.startsWith('Photo 3 of 6')), 'toolbar names the selected photo', await page.textContent('#sel-info'));
+  check(await page.$eval('#sel-info', (n) => n.textContent.startsWith('Photo 3 of 8')), 'toolbar names the selected photo', await page.textContent('#sel-info'));
   // Click inside a tile moves the preview there.
   const t4 = await tileBox(3);
   await page.mouse.click(t4.x + t4.width / 2, t4.y + t4.height / 2);
@@ -158,6 +216,14 @@ try {
   const finalOrder = await storyUrls();
 
   await page.fill('#guest', 'Rustee & Levi');
+
+  // The phone photo is shown upright and full size in the preview, with the shape the render uses.
+  const phoneAt = finalOrder.indexOf(ph.url);
+  const s0 = (await page.evaluate(() => window.pocketace.plan.shots))[phoneAt];
+  await page.$eval('#audio', (a, t) => { a.currentTime = t; }, 781 + (s0.start + s0.end) / 2);
+  await page.waitForTimeout(500);
+  const layer = await page.evaluate((i) => { const l = document.querySelectorAll('#layers .layer')[i]; const img = l.querySelector('.fg img'); return { w: img.naturalWidth, h: img.naturalHeight, opacity: l.style.opacity }; }, phoneAt);
+  check(layer.w === 3024 && layer.h === 4032 && layer.opacity === '1', 'the preview shows the imported phone photo upright at full resolution', `${layer.w}×${layer.h}`);
 
   // ---- Sections collapse independently, with summaries ----
   await page.click('#step-photos > summary');
@@ -175,6 +241,10 @@ try {
   check((await val('#guest')) === 'Rustee & Levi', 'edited text survives a reload');
   check(JSON.stringify(await page.$$eval('details.step', (ds) => ds.map((d) => d.open))) === '[false,true,false,true]', 'open/closed sections survive a reload');
   check((await page.textContent('#sum-episode')).startsWith('Episode 29 ·'), 'episode summary after reload', await page.textContent('#sum-episode'));
+  await page.$eval('#step-photos', (d) => { d.open = true; });
+  await page.waitForTimeout(500);
+  const localAfter = await page.$$eval('#gallery .gitem.local img', (imgs) => imgs.map((i) => i.complete && i.naturalWidth > 0));
+  check(localAfter.length >= 4 && localAfter.every(Boolean), 'imported photos are still there after a reload', `${localAfter.length} imported`);
   await page.waitForFunction(() => Number.isFinite(document.querySelector('#audio').duration), null, { timeout: 90000 });
 
   // ---- Render: the request carries the strip order; the MP4 comes out ----
@@ -195,13 +265,37 @@ try {
   // the centre of the framed photo with the centre of each source photo.
   const shots = await page.evaluate(() => window.pocketace.plan.shots);
   const patch = (input, ss, crop) => execFileSync(ffmpeg, ['-v', 'fatal', ...(ss != null ? ['-ss', String(ss)] : []), '-i', input, '-frames:v', '1', '-vf', `${crop},scale=8:8,format=gray`, '-f', 'rawvideo', '-']);
-  const sources = finalOrder.map((u) => patch(u, null, 'crop=iw*0.3:ih*0.3:iw*0.35:ih*0.35'));
+  const sources = finalOrder.map((u) => patch(u.startsWith('/') ? base + u : u, null, 'crop=iw*0.3:ih*0.3:iw*0.35:ih*0.35'));
   const seen = shots.map((s) => {
     const f = patch(mp4, (s.start + s.end) / 2, `crop=iw*0.12:ih*0.05:iw*0.44:ih*${0.43 - 0.025}`);
     const dist = sources.map((src) => src.reduce((acc, b, k) => acc + Math.abs(b - f[k]), 0));
     return dist.indexOf(Math.min(...dist));
   });
-  check(seen.every((idx, i) => idx === i), 'each shot in the MP4 shows the photo in that strip position', `matched ${JSON.stringify(seen)}`);
+  check(seen.every((idx, i) => idx === i), 'each shot in the MP4 shows the photo in that strip position (imported ones included)', `matched ${JSON.stringify(seen)}`);
+
+  // ---- Removing imported photos ----
+  const removeByName = async (n) => {
+    const item = page.locator('#gallery .gitem').nth(await gIndex(n));
+    await item.scrollIntoViewIfNeeded();
+    await item.hover();
+    await item.locator('.remove').click();
+  };
+  await removeByName(path.basename(bars));
+  check(!(await page.evaluate((n) => window.pocketace.library.some((p) => p.name === n), path.basename(bars))), 'an imported photo can be removed from the gallery');
+  let asked = '';
+  page.once('dialog', (d) => { asked = d.message(); d.accept(); });
+  await removeByName('studio.png');
+  const after = await storyUrls();
+  check(asked.includes('in your story') && after.length === 7 && after.every((u) => !u.endsWith('.png')), 'removing one that is in the story asks first, then takes it out of the story too', asked);
+  // A file that has vanished from the computer is shown as missing, not silently broken.
+  const id = ph.url.slice('/uploads/'.length, '/uploads/'.length + 64);
+  for (const f of readdirSync(path.join(data, 'uploads')).filter((f) => f.startsWith(id))) rmSync(path.join(data, 'uploads', f));
+  await page.reload();
+  await page.$eval('#step-photos', (d) => { d.open = true; });
+  await page.waitForTimeout(1500);
+  check((await page.locator('#gallery .gitem.missing').count()) === 1, 'an imported file that has gone is marked "Missing"');
+  const warn = await page.textContent('#warnings');
+  check(/no longer on this computer/.test(warn), 'and the story says so before any render', warn.slice(0, 80));
   writeFileSync(path.join(work, 'order.json'), JSON.stringify({ finalOrder, shots, mp4 }, null, 1));
   console.log(`\nVideo and screenshots: ${work}`);
 } finally {

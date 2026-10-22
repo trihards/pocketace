@@ -5,7 +5,8 @@ import { motion, placement, transitionFor } from './look.js';
 const $ = (s) => document.querySelector(s);
 const state = {
   episode: null,     // {url, title} of the last successful lookup
-  library: [],       // every photo we know about: {url, thumb, width, height}
+  library: [],       // every photo we know about: {url, thumb, width, height, local?, name?}
+                     // local = imported from Ace's computer, url = /uploads/<hash>.<ext>
   story: [],         // chosen photos, in playback order: {url}
   selected: null,    // url of the photo picked on the story strip
   captions: null,    // {name, text} of an optional captions file
@@ -36,7 +37,9 @@ $('#lookup').addEventListener('submit', async (e) => {
     const ep = data.title?.match(/ep(?:isode)?\.?\s*(\d+)/i)?.[1];
     $('#subtitle').value = [ep && `Ep ${ep}`, tag && titleCase(tag)].filter(Boolean).join(' · ');
     if (data.audio[0]) setAudio(data.audio[0].url);
-    state.library = data.images.map((i) => ({ url: i.url, thumb: thumb(i.url), width: i.width, height: i.height }));
+    // Photos Ace imported stay, whichever episode is looked up.
+    const imported = state.library.filter((p) => p.local);
+    state.library = [...data.images.map((i) => ({ url: i.url, thumb: thumb(i.url), width: i.width, height: i.height })), ...imported];
     // Looking the same episode up again keeps the story; a new episode starts a fresh one.
     state.story = same ? state.story.filter((p) => state.library.some((l) => l.url === p.url)) : [];
     refresh();
@@ -55,7 +58,111 @@ $('#add-photo').addEventListener('submit', (e) => {
 });
 
 function thumb(url) {
+  const up = url.match(/^\/uploads\/([0-9a-f]{64})\./);
+  if (up) return `/uploads/${up[1]}.thumb.jpg`;
   return /squarespace(-cdn)?\.com\//.test(url) ? `${url.split('?')[0]}?format=500w` : url;
+}
+
+// ---------- Photos from Ace's computer ----------
+// Each file is uploaded once to the PocketAce server, which keeps the original
+// and gives back a lasting address; the saved project only keeps that address.
+$('#import-photos').addEventListener('click', () => $('#import-files').click());
+$('#import-files').addEventListener('change', (e) => { importFiles(e.target.files); e.target.value = ''; });
+
+// Drop anywhere on the Photos section (it opens if it was closed). Dropping a
+// file elsewhere on the page must not make the browser open it instead.
+const photoBox = $('#step-photos');
+const hasFiles = (e) => [...(e.dataTransfer?.types || [])].includes('Files');
+let dragDepth = 0;
+photoBox.addEventListener('dragenter', (e) => { if (!hasFiles(e)) return; dragDepth++; photoBox.open = true; photoBox.classList.add('dropping'); });
+photoBox.addEventListener('dragleave', () => { if (--dragDepth <= 0) { dragDepth = 0; photoBox.classList.remove('dropping'); } });
+photoBox.addEventListener('dragover', (e) => { if (hasFiles(e)) { e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; } });
+photoBox.addEventListener('drop', (e) => {
+  if (!hasFiles(e)) return;
+  e.preventDefault();
+  dragDepth = 0;
+  photoBox.classList.remove('dropping');
+  importFiles(e.dataTransfer.files);
+});
+window.addEventListener('dragover', (e) => { if (hasFiles(e)) e.preventDefault(); });
+window.addEventListener('drop', (e) => { if (hasFiles(e)) e.preventDefault(); });
+
+const isHeic = (f) => /^image\/hei[cf]/i.test(f.type) || /\.hei[cf]$/i.test(f.name);
+const IMAGE_NAME = /\.(jpe?g|png|webp|hei[cf])$/i;
+
+async function importFiles(fileList) {
+  const files = [...fileList];
+  if (!files.length) return;
+  const problems = [];
+  let added = 0;
+  for (const [n, f] of files.entries()) {
+    setStatus('#import-status', `Adding ${files.length === 1 ? f.name : `photo ${n + 1} of ${files.length}`}…`);
+    if (!f.type.startsWith('image/') && !IMAGE_NAME.test(f.name)) { problems.push(`${f.name} isn't a photo.`); continue; }
+    if (f.size > 60e6) { problems.push(`${f.name} is larger than 60 MB. Export a smaller copy and add that.`); continue; }
+    let body = f, name = f.name;
+    if (isHeic(f)) {
+      try { body = await heicToJpeg(f); name = f.name.replace(/\.hei[cf]$/i, '.jpg'); } catch {
+        problems.push(`${f.name} is an HEIC photo (Apple's format), and this browser can't open it. Add it from Safari, which converts it, or in Photos choose File › Export › Export 1 Photo with Kind set to JPEG.`);
+        continue;
+      }
+    }
+    try {
+      const r = await fetch('/api/photos', { method: 'POST', headers: { 'content-type': body.type || 'application/octet-stream', 'x-filename': encodeURIComponent(name) }, body });
+      const d = await r.json();
+      if (!r.ok) { problems.push(d.error); continue; }
+      if (state.library.some((p) => p.url === d.url)) { problems.push(`${name} is already in the gallery.`); continue; }
+      state.library.push({ url: d.url, thumb: d.thumb, width: d.width, height: d.height, local: true, name: d.name });
+      added++;
+      refresh();
+    } catch (err) {
+      problems.push(`${name} could not be added: ${err.message}`);
+    }
+  }
+  const done = added ? `Added ${added} photo${added === 1 ? '' : 's'}. Tap one to put it in the story.` : '';
+  setStatus('#import-status', [done, ...problems].filter(Boolean).join(' '), problems.length > 0);
+}
+
+// Safari reads HEIC natively; redraw it at full size and send a JPEG. The
+// drawn pixels are already the right way up, so no orientation tag is needed.
+async function heicToJpeg(file) {
+  const src = URL.createObjectURL(file);
+  try {
+    const img = new Image();
+    img.src = src;
+    await img.decode();
+    const c = document.createElement('canvas');
+    c.width = img.naturalWidth;
+    c.height = img.naturalHeight;
+    c.getContext('2d').drawImage(img, 0, 0);
+    const blob = await new Promise((ok) => c.toBlob(ok, 'image/jpeg', 0.95));
+    if (!blob) throw new Error('could not convert');
+    return blob;
+  } finally { URL.revokeObjectURL(src); }
+}
+
+// The browser keeps imported photos cached, so a file that has gone from the
+// computer can still look fine here. Ask the server which ones it still has.
+const missing = new Set();
+async function checkImported() {
+  const local = state.library.filter((p) => p.local);
+  await Promise.all(local.map(async (p) => {
+    try {
+      const r = await fetch(p.url, { method: 'HEAD', cache: 'no-store' });
+      if (r.status === 404) missing.add(p.url); else missing.delete(p.url);
+    } catch { /* server unreachable: say nothing */ }
+  }));
+  if (local.length) refresh();
+}
+
+function removeImported(url) {
+  const p = state.library.find((l) => l.url === url);
+  const inStory = state.story.some((s) => s.url === url);
+  if (inStory && !confirm(`Remove ${p?.name || 'this photo'}? It's in your story and will come out of it too.`)) return;
+  state.library = state.library.filter((l) => l.url !== url);
+  state.story = state.story.filter((s) => s.url !== url);
+  missing.delete(url);
+  setStatus('#import-status', `Removed ${p?.name || 'the photo'} from this project.`);
+  refresh();
 }
 
 // ---------- 2. Excerpt ----------
@@ -190,7 +297,9 @@ function refresh() {
   renderGallery();
   renderRange();
   renderStrip();
-  $('#warnings').replaceChildren(...state.plan.warnings.map((w) => el('li', { textContent: w })));
+  const gone = state.story.map((p, i) => (missing.has(p.url) ? i + 1 : 0)).filter(Boolean);
+  const warnings = [...(gone.length ? [`Photo${gone.length > 1 ? 's' : ''} ${gone.join(', ')} ${gone.length > 1 ? 'were' : 'was'} imported but ${gone.length > 1 ? 'are' : 'is'} no longer on this computer. Remove ${gone.length > 1 ? 'them' : 'it'} in Photos and add ${gone.length > 1 ? 'them' : 'it'} again.`] : []), ...state.plan.warnings];
+  $('#warnings').replaceChildren(...warnings.map((w) => el('li', { textContent: w })));
   buildLayers();
   drawFrame();
   renderSummaries();
@@ -199,14 +308,20 @@ function refresh() {
 
 function renderGallery() {
   const g = $('#gallery');
-  if (!state.library.length) return;
+  if (!state.library.length) {
+    g.replaceChildren(el('p', { className: 'empty', textContent: 'Photos from the episode page appear here. To add your own, drop them here or use Add photos.' }));
+    return;
+  }
   g.replaceChildren(...state.library.map((p) => {
+    const item = el('div', { className: `gitem${p.local ? ' local' : ''}${missing.has(p.url) ? ' missing' : ''}` });
     const b = el('button', { type: 'button', className: 'thumb' });
     const idx = state.story.findIndex((s) => s.url === p.url);
     b.classList.toggle('on', idx >= 0);
     b.setAttribute('aria-pressed', idx >= 0);
     b.setAttribute('aria-label', idx >= 0 ? `Photo ${idx + 1} in the story. Tap to take it out.` : 'Add to the story');
-    b.append(el('img', { src: p.thumb, alt: '', loading: 'lazy' }));
+    const img = el('img', { src: p.thumb || thumb(p.url), alt: '', loading: 'lazy' });
+    if (p.local) img.addEventListener('error', () => { item.classList.add('missing'); b.title = `${p.name || 'This photo'} is no longer on this computer. Remove it and add it again.`; }, { once: true });
+    b.append(img);
     if (idx >= 0) b.append(el('span', { className: 'badge', textContent: idx + 1 }));
     if (p.width) {
       const low = Math.max(p.width, p.height) < 800;
@@ -216,7 +331,16 @@ function renderGallery() {
       if (idx >= 0) state.story.splice(idx, 1); else state.story.push({ url: p.url });
       refresh();
     });
-    return b;
+    item.append(b);
+    if (p.local) {
+      if (p.name) b.title ||= p.name;
+      item.append(el('span', { className: 'mine', textContent: 'Yours' }));
+      const x = el('button', { type: 'button', className: 'remove', textContent: '✕', title: 'Remove from this project' });
+      x.setAttribute('aria-label', `Remove ${p.name || 'this photo'} from this project`);
+      x.addEventListener('click', () => removeImported(p.url));
+      item.append(x);
+    }
+    return item;
   }));
 }
 
@@ -664,3 +788,4 @@ function fmtShort(sec) {
 restore();
 refresh();
 checkRenderer();
+checkImported();
