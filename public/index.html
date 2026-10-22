@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PocketAce</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;600;800&family=Shrikhand&display=swap">
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+<header class="top">
+  <span class="mark">Aced Out</span>
+  <span class="product">PocketAce · story maker <em>prototype</em></span>
+</header>
+
+<main class="layout">
+  <section class="steps">
+    <article class="step" id="step-episode">
+      <h2><span class="n">1</span> Episode</h2>
+      <form id="lookup" class="row">
+        <input id="episode-url" type="url" placeholder="https://www.acedoutpodcast.com/episodes/32/linda-shider" value="https://www.acedoutpodcast.com/episodes/32/linda-shider" required>
+        <button type="submit" class="primary">Get episode</button>
+      </form>
+      <p id="lookup-status" class="status" role="status"></p>
+      <details id="lookup-details" hidden><summary>What the lookup found</summary><pre id="lookup-report"></pre></details>
+      <div class="fields">
+        <label>Guest name on screen <input id="guest" type="text" placeholder="Linda Shider"></label>
+        <label>Line underneath <input id="subtitle" type="text" placeholder="Ep 32 · P-Funk / Garry Shider"></label>
+      </div>
+    </article>
+
+    <article class="step" id="step-excerpt">
+      <h2><span class="n">2</span> Excerpt</h2>
+      <label class="wide">Episode audio <input id="audio-url" type="url" placeholder="Found automatically, or paste the MP3 address"></label>
+      <audio id="audio" controls preload="metadata"></audio>
+      <div class="excerpt">
+        <div class="stamp">
+          <span class="lbl">Start</span>
+          <input id="start" type="text" value="0:00.0" inputmode="decimal">
+          <button type="button" data-set="start">Use current time</button>
+        </div>
+        <div class="stamp">
+          <span class="lbl">End</span>
+          <input id="end" type="text" value="1:00.0" inputmode="decimal">
+          <button type="button" data-set="end">Use current time</button>
+        </div>
+        <div class="stamp len"><span class="lbl">Length</span><output id="length">1:00.0</output></div>
+      </div>
+    </article>
+
+    <article class="step" id="step-photos">
+      <h2><span class="n">3</span> Photos</h2>
+      <p class="hint">Tap photos to add them to the story, in the order you want. Pin one to make it appear at the moment the audio is at.</p>
+      <div id="gallery" class="gallery"><p class="empty">Photos from the episode page appear here.</p></div>
+      <form id="add-photo" class="row">
+        <input id="photo-url" type="url" placeholder="Add a photo by its web address">
+        <button type="submit">Add</button>
+      </form>
+      <h3>The story <small id="story-count"></small></h3>
+      <ol id="story" class="story"></ol>
+      <ul id="warnings" class="warnings"></ul>
+    </article>
+
+    <article class="step" id="step-captions">
+      <h2><span class="n">4</span> Captions <small>optional</small></h2>
+      <p class="hint">Use an SRT or VTT file timed to the full episode. Only the lines inside the excerpt are used.</p>
+      <input id="captions" type="file" accept=".srt,.vtt,text/vtt,application/x-subrip">
+      <p id="captions-status" class="status"></p>
+    </article>
+  </section>
+
+  <aside class="preview-col">
+    <div class="phone">
+      <div id="stage" class="stage">
+        <div id="layers"></div>
+        <div class="shade"></div>
+        <div class="ov-brand">Aced Out</div>
+        <div id="ov-caption" class="ov-caption" hidden></div>
+        <div class="ov-lower"><div id="ov-guest"></div><div id="ov-sub"></div></div>
+      </div>
+    </div>
+    <div class="transport">
+      <button id="play" type="button" class="primary">▶ Play excerpt</button>
+      <output id="clock">0:00.0</output>
+    </div>
+    <div id="timeline" class="timeline" title="Click to jump"><div id="playhead" class="playhead"></div></div>
+    <div class="render">
+      <fieldset class="quality">
+        <label><input type="radio" name="quality" value="draft" checked> Quick draft (540×960)</label>
+        <label><input type="radio" name="quality" value="final"> Final 1080×1920</label>
+      </fieldset>
+      <button id="render" type="button" class="primary big">Make the video</button>
+      <div id="job" hidden>
+        <progress id="job-progress" max="1" value="0"></progress>
+        <p id="job-status" class="status" role="status"></p>
+      </div>
+      <div id="result" hidden>
+        <video id="result-video" controls playsinline></video>
+        <a id="download" class="primary button" href="#">Download MP4</a>
+      </div>
+    </div>
+  </aside>
+</main>
+<script type="module" src="app.js"></script>
+</body>
+</html>

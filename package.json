@@ -1,0 +1,14 @@
+{
+  "name": "pocketace",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Proof of concept: illustrated vertical videos from Aced Out Podcast excerpts",
+  "type": "module",
+  "engines": { "node": ">=22" },
+  "scripts": {
+    "start": "node server.js",
+    "test": "node --test test/*.test.js",
+    "probe": "node tools/probe.js",
+    "demo": "node tools/demo-render.js"
+  }
+}
