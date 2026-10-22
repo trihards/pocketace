@@ -9,66 +9,34 @@ const contiguous = (shots, D) => {
   for (let i = 1; i < shots.length; i++) assert.equal(shots[i].start, shots[i - 1].end);
 };
 
-test('no pins: even split in the given order', () => {
+test('even split in the given order', () => {
   const { shots, warnings } = schedule({ duration: 60, photos: ids(4) });
   assert.deepEqual(shots.map((s) => s.id), ['p0', 'p1', 'p2', 'p3']);
   assert.deepEqual(shots.map((s) => s.end - s.start), [15, 15, 15, 15]);
   assert.deepEqual(warnings, []);
 });
 
-test('a pinned photo starts exactly at its pin', () => {
-  const photos = ids(6);
-  photos[4].pin = 20;
-  const { shots } = schedule({ duration: 45, photos });
-  contiguous(shots, 45);
-  const pinned = shots.find((s) => s.id === 'p4');
-  assert.equal(pinned.start, 20);
-  assert.equal(pinned.pinned, true);
-  // Unpinned photos keep their relative order around the pin.
-  assert.deepEqual(shots.map((s) => s.id), ['p0', 'p1', 'p2', 'p4', 'p3', 'p5']);
-});
-
-test("unpinned photos go where shots are longest (D'Hondt)", () => {
-  const photos = ids(5);
-  photos[0].pin = 50; // short lead (50s) vs. long tail (250s)
-  const { shots } = schedule({ duration: 300, photos });
-  contiguous(shots, 300);
-  const before = shots.filter((s) => s.start < 50).length;
-  assert.equal(before, 1);
-  assert.equal(shots.length, 5);
-});
-
-test('pin at 0 opens the video with that photo', () => {
-  const photos = ids(3);
-  photos[2].pin = 0;
+test('order is exactly the order given, whatever the old pin field says', () => {
+  const photos = [{ id: 'c', pin: 0 }, { id: 'a' }, { id: 'b', pin: 5 }];
   const { shots } = schedule({ duration: 30, photos });
-  assert.equal(shots[0].id, 'p2');
+  assert.deepEqual(shots.map((s) => s.id), ['c', 'a', 'b']);
   contiguous(shots, 30);
 });
 
-test('only pinned photos: first pin is pulled to the start', () => {
-  const photos = [{ id: 'a', pin: 10 }, { id: 'b', pin: 20 }];
-  const { shots } = schedule({ duration: 30, photos });
-  assert.deepEqual(shots.map((s) => [s.id, s.start, s.end]), [['a', 0, 20], ['b', 20, 30]]);
-});
-
-test('pins out of range or colliding are handled with warnings', () => {
-  const photos = [{ id: 'a', pin: 99 }, { id: 'b', pin: 10 }, { id: 'c', pin: 10.5 }, { id: 'd' }];
-  const { shots, warnings } = schedule({ duration: 40, photos });
-  contiguous(shots, 40);
-  assert.equal(shots.find((s) => s.id === 'c').start, 12);
-  assert.ok(warnings.some((w) => w.includes('outside')));
-  assert.ok(warnings.some((w) => w.includes('apart')));
+test('weights share out the excerpt proportionally (the hook for draggable boundaries)', () => {
+  const { shots } = schedule({ duration: 60, photos: [{ id: 'a', weight: 2 }, { id: 'b' }, { id: 'c', weight: 1 }] });
+  assert.deepEqual(shots.map((s) => s.end - s.start), [30, 15, 15]);
+  contiguous(shots, 60);
 });
 
 test('same input, same output', () => {
-  const photos = ids(9).map((p, i) => ({ ...p, pin: i === 3 ? 41.3 : i === 7 ? 200 : null }));
-  assert.deepEqual(schedule({ duration: 420, photos }), schedule({ duration: 420, photos }));
+  assert.deepEqual(schedule({ duration: 420, photos: ids(9) }), schedule({ duration: 420, photos: ids(9) }));
 });
 
-test('boundaries land on whole frames', () => {
+test('boundaries land on whole frames and tile the excerpt', () => {
   const { shots } = schedule({ duration: 100, photos: ids(7) });
   for (const s of shots) assert.ok(Math.abs(s.start * 30 - Math.round(s.start * 30)) < 1e-6);
+  contiguous(shots, 100);
 });
 
 test('too many or too few photos produce warnings, not failures', () => {

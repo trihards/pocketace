@@ -4,13 +4,16 @@ import { motion, placement, transitionFor } from './look.js';
 
 const $ = (s) => document.querySelector(s);
 const state = {
-  library: [],      // every photo we know about: {url, thumb, width, height}
-  story: [],        // chosen photos in order: {url, pin}; pin = seconds into the *episode*,
-                    // so a pin stays on its moment when the excerpt start moves
+  episode: null,     // {url, title} of the last successful lookup
+  library: [],       // every photo we know about: {url, thumb, width, height}
+  story: [],         // chosen photos, in playback order: {url}
+  selected: null,    // url of the photo picked on the story strip
+  captions: null,    // {name, text} of an optional captions file
   cues: [],
   plan: { shots: [], warnings: [] },
 };
 const audio = $('#audio');
+const SECTIONS = ['step-episode', 'step-excerpt', 'step-photos', 'step-story'];
 window.pocketace = state; // inspectable from the browser console when helping remotely
 
 // ---------- 1. Episode lookup ----------
@@ -26,13 +29,16 @@ $('#lookup').addEventListener('submit', async (e) => {
     $('#lookup-details').hidden = false;
     const failed = data.sources.filter((s) => !s.ok).map((s) => `${s.name} (${s.note || s.status})`);
     setStatus('#lookup-status', `${data.title || 'Untitled episode'}: ${data.images.length} photo(s), ${data.audio.length ? 'audio found' : 'no audio found'}.` + (failed.length ? ` Not available: ${failed.join(', ')}.` : ''), !data.audio.length || !data.images.length);
+    const same = state.episode?.url === data.url;
+    state.episode = { url: data.url, title: data.title };
     if (data.guest) $('#guest').value = data.guest;
     const tag = data.title?.match(/\[([^\]]+)\]/)?.[1];
     const ep = data.title?.match(/ep(?:isode)?\.?\s*(\d+)/i)?.[1];
     $('#subtitle').value = [ep && `Ep ${ep}`, tag && titleCase(tag)].filter(Boolean).join(' · ');
     if (data.audio[0]) setAudio(data.audio[0].url);
     state.library = data.images.map((i) => ({ url: i.url, thumb: thumb(i.url), width: i.width, height: i.height }));
-    state.story = [];
+    // Looking the same episode up again keeps the story; a new episode starts a fresh one.
+    state.story = same ? state.story.filter((p) => state.library.some((l) => l.url === p.url)) : [];
     refresh();
   } catch (err) {
     setStatus('#lookup-status', `Could not read that page: ${err.message}. You can still paste the audio and photo addresses below.`, true);
@@ -54,31 +60,141 @@ function thumb(url) {
 
 // ---------- 2. Excerpt ----------
 function setAudio(url) { $('#audio-url').value = url; audio.src = url; }
-$('#audio-url').addEventListener('change', (e) => { audio.src = e.target.value.trim(); });
+$('#audio-url').addEventListener('change', (e) => { audio.src = e.target.value.trim(); save(); });
 const range = () => ({ start: parseTime($('#start').value), end: parseTime($('#end').value) });
-document.querySelectorAll('[data-set]').forEach((b) => b.addEventListener('click', () => {
-  $(`#${b.dataset.set}`).value = fmt(audio.currentTime);
+const epLength = () => (Number.isFinite(audio.duration) && audio.duration > 0 ? audio.duration : null);
+const MIN_EXCERPT = 1;
+
+// Moves one end of the excerpt, keeping start before end and both inside the
+// episode. Everything else (fields, handles, length, story) follows from refresh().
+function setBound(which, t) {
+  const { start, end } = range();
+  const D = epLength() ?? Infinity;
+  const lo = which === 'start' ? 0 : (Number.isFinite(start) ? start + MIN_EXCERPT : 0);
+  const hi = which === 'start' ? (Number.isFinite(end) ? end - MIN_EXCERPT : D) : D;
+  const v = Math.round(Math.min(Math.max(t, lo), hi) * 10) / 10;
+  $(`#${which}`).value = fmt(v);
   refresh();
+  return v;
+}
+
+document.querySelectorAll('[data-set]').forEach((b) => b.addEventListener('click', () => setBound(b.dataset.set, audio.currentTime)));
+document.querySelectorAll('[data-nudge]').forEach((b) => b.addEventListener('click', () => {
+  const t = range()[b.dataset.nudge];
+  if (Number.isFinite(t)) setBound(b.dataset.nudge, t + Number(b.dataset.by));
 }));
 // Update while typing, not on 'change': 'change' fires on blur, i.e. in the
 // middle of a click elsewhere, and the re-render would swallow that click.
 ['#start', '#end'].forEach((s) => $(s).addEventListener('input', refresh));
 
-// ---------- 3. Photos & story ----------
+// The range bar: the whole episode, the excerpt in gold, playback as a white line.
+for (const which of ['start', 'end']) {
+  const h = $(`#h-${which}`);
+  h.addEventListener('pointerdown', (e) => {
+    if (!epLength() || e.button !== 0) return;
+    e.preventDefault();
+    e.stopPropagation();
+    h.focus();
+    h.setPointerCapture(e.pointerId);
+    h.classList.add('active');
+    let t = range()[which];
+    let lastX = e.clientX;
+    // Relative movement, so the handle never jumps under the pointer; with
+    // Shift held it moves at a twentieth of the speed for fine adjustments.
+    const move = (ev) => {
+      const w = $('#range').getBoundingClientRect().width;
+      t += ((ev.clientX - lastX) / w) * epLength() * (ev.shiftKey ? 0.05 : 1);
+      lastX = ev.clientX;
+      t = setBound(which, t);
+    };
+    const up = () => {
+      h.classList.remove('active');
+      h.removeEventListener('pointermove', move);
+      h.removeEventListener('pointerup', up);
+      h.removeEventListener('pointercancel', up);
+    };
+    h.addEventListener('pointermove', move);
+    h.addEventListener('pointerup', up);
+    h.addEventListener('pointercancel', up);
+  });
+  h.addEventListener('keydown', (e) => {
+    const t = range()[which];
+    if (!epLength() || !Number.isFinite(t)) return;
+    const step = e.altKey ? 0.1 : e.shiftKey ? 10 : 1;
+    const to = { ArrowLeft: t - step, ArrowDown: t - step, ArrowRight: t + step, ArrowUp: t + step, PageDown: t - 60, PageUp: t + 60, Home: 0, End: epLength() }[e.key];
+    if (to === undefined) return;
+    e.preventDefault();
+    setBound(which, to);
+  });
+}
+// Clicking or dragging on the bar itself moves playback, not the excerpt.
+$('#range').addEventListener('pointerdown', (e) => {
+  if (!epLength() || e.button !== 0) return;
+  const bar = $('#range');
+  const seek = (ev) => {
+    const r = bar.getBoundingClientRect();
+    audio.currentTime = Math.min(Math.max((ev.clientX - r.left) / r.width, 0), 1) * epLength();
+    drawPlayback();
+    drawFrame();
+  };
+  bar.setPointerCapture(e.pointerId);
+  seek(e);
+  bar.addEventListener('pointermove', seek);
+  const up = () => { bar.removeEventListener('pointermove', seek); bar.removeEventListener('pointerup', up); };
+  bar.addEventListener('pointerup', up);
+});
+
+function renderRange() {
+  const D = epLength();
+  const { start, end } = range();
+  $('#range').classList.toggle('off', !D);
+  $('#range-dur').textContent = D ? fmtShort(D) : '';
+  $('#range-note').textContent = D ? 'Drag the gold handles. Hold Shift while dragging for fine moves.' : (audio.src ? 'Loading the episode audio…' : 'The excerpt bar appears once the episode audio loads.');
+  if (!D) return;
+  const pct = (t) => `${(Math.min(Math.max(t, 0), D) / D) * 100}%`;
+  const ok = Number.isFinite(start) && Number.isFinite(end) && end > start;
+  const sel = $('#range-sel');
+  sel.hidden = !ok;
+  if (ok) Object.assign(sel.style, { left: pct(start), width: `${((Math.min(end, D) - Math.min(start, D)) / D) * 100}%` });
+  for (const [which, t] of [['start', start], ['end', end]]) {
+    const h = $(`#h-${which}`);
+    h.hidden = !Number.isFinite(t);
+    if (!Number.isFinite(t)) continue;
+    h.style.left = pct(t);
+    h.setAttribute('aria-valuemin', '0');
+    h.setAttribute('aria-valuemax', String(Math.round(D)));
+    h.setAttribute('aria-valuenow', String(t));
+    h.setAttribute('aria-valuetext', fmt(t));
+    h.querySelector('.tip').textContent = fmt(t);
+  }
+  drawPlayback();
+}
+function drawPlayback() {
+  const D = epLength();
+  if (D) $('#range-play').style.left = `${(audio.currentTime / D) * 100}%`;
+}
+audio.addEventListener('loadedmetadata', refresh);
+audio.addEventListener('timeupdate', drawPlayback);
+
+// ---------- 3 + 4. Photos and the story ----------
 function refresh() {
   const { start, end } = range();
   const len = end - start;
   $('#length').textContent = len > 0 ? fmt(len) : '—';
-  renderGallery();
+  if (state.selected && !state.story.some((p) => p.url === state.selected)) state.selected = null;
   try {
     state.plan = state.story.length && len > 0
-      ? schedule({ duration: len, photos: state.story.map((p, i) => ({ id: i, pin: rel(p.pin) })) })
+      ? schedule({ duration: len, photos: state.story.map((p, i) => ({ id: i })) })
       : { shots: [], warnings: [] };
   } catch (err) { state.plan = { shots: [], warnings: [err.message] }; }
-  renderStory();
-  renderTimeline();
+  renderGallery();
+  renderRange();
+  renderStrip();
+  $('#warnings').replaceChildren(...state.plan.warnings.map((w) => el('li', { textContent: w })));
   buildLayers();
   drawFrame();
+  renderSummaries();
+  save();
 }
 
 function renderGallery() {
@@ -89,6 +205,7 @@ function renderGallery() {
     const idx = state.story.findIndex((s) => s.url === p.url);
     b.classList.toggle('on', idx >= 0);
     b.setAttribute('aria-pressed', idx >= 0);
+    b.setAttribute('aria-label', idx >= 0 ? `Photo ${idx + 1} in the story. Tap to take it out.` : 'Add to the story');
     b.append(el('img', { src: p.thumb, alt: '', loading: 'lazy' }));
     if (idx >= 0) b.append(el('span', { className: 'badge', textContent: idx + 1 }));
     if (p.width) {
@@ -96,64 +213,216 @@ function renderGallery() {
       b.append(el('span', { className: `res${low ? ' low' : ''}`, textContent: `${p.width}×${p.height}`, title: low ? 'Small photo: it will appear smaller on screen' : '' }));
     }
     b.addEventListener('click', () => {
-      if (idx >= 0) state.story.splice(idx, 1); else state.story.push({ url: p.url, pin: null });
+      if (idx >= 0) state.story.splice(idx, 1); else state.story.push({ url: p.url });
       refresh();
     });
     return b;
   }));
 }
 
-function renderStory() {
-  const shots = new Map(state.plan.shots.map((s) => [s.id, s]));
-  $('#story-count').textContent = state.story.length ? `${state.story.length} photo(s)` : 'Nothing yet';
-  $('#story').replaceChildren(...state.story.map((p, i) => {
-    const s = shots.get(i);
-    const li = el('li', { className: p.pin != null ? 'pinned' : '' });
-    const when = el('div', { className: 'when' });
-    when.innerHTML = s ? `${fmt(s.start)} – ${fmt(s.end)}` + (p.pin != null ? ` <b>pinned at ${fmt(rel(p.pin))}</b>` : '') : '';
-    const tools = el('div', { className: 'tools' });
-    const btn = (label, title, fn) => { const b = el('button', { type: 'button', textContent: label, title }); b.addEventListener('click', () => { fn(); refresh(); }); tools.append(b); };
-    btn('↑', 'Earlier', () => i > 0 && state.story.splice(i - 1, 0, state.story.splice(i, 1)[0]));
-    btn('↓', 'Later', () => i < state.story.length - 1 && state.story.splice(i + 1, 0, state.story.splice(i, 1)[0]));
-    if (p.pin == null) btn('Pin here', 'Show this photo from the current audio position', () => { p.pin = audio.currentTime; });
-    else btn('Unpin', '', () => { p.pin = null; });
-    btn('✕', 'Remove from story', () => state.story.splice(i, 1));
-    li.append(el('img', { src: thumb(p.url), alt: '' }), when, tools);
-    return li;
-  }));
-  $('#warnings').replaceChildren(...state.plan.warnings.map((w) => el('li', { textContent: w })));
-}
-
-function renderTimeline() {
-  const { start, end } = range();
-  const tl = $('#timeline');
-  tl.querySelectorAll('.seg').forEach((n) => n.remove());
-  for (const s of state.plan.shots) {
-    const seg = el('div', { className: `seg${s.pinned ? ' pinned' : ''}` });
-    seg.style.flex = `${s.end - s.start} 0 0`;
-    seg.style.backgroundImage = `url("${thumb(state.story[s.id].url)}")`;
-    tl.append(seg);
+// The story strip: one tile per photo, in playback order, each as wide as its
+// share of the excerpt. Tile widths come straight from the scheduled shots, so
+// the day shot lengths become adjustable, dragging the edge between two tiles
+// is the only new interaction needed.
+let stripKey = '';
+function renderStrip() {
+  const strip = $('#strip');
+  const shots = state.plan.shots;
+  const key = state.story.map((p) => p.url).join('\n');
+  if (key !== stripKey) {
+    stripKey = key;
+    strip.replaceChildren(...state.story.map((p, i) => {
+      const li = el('li', { className: 'cell' });
+      const b = el('button', { type: 'button', className: 'tile' });
+      b.dataset.index = i;
+      b.style.backgroundImage = `url("${thumb(p.url)}")`;
+      b.append(el('span', { className: 'num', textContent: i + 1 }), el('span', { className: 'dur' }));
+      li.append(b);
+      return li;
+    }));
   }
-  tl.onclick = (e) => {
-    const r = tl.getBoundingClientRect();
-    audio.currentTime = start + ((e.clientX - r.left) / r.width) * (end - start);
-    drawFrame();
-  };
+  const tiles = [...strip.querySelectorAll('.tile')];
+  const sel = state.story.findIndex((p) => p.url === state.selected);
+  tiles.forEach((b, i) => {
+    const s = shots[i];
+    const d = s ? s.end - s.start : 1;
+    b.parentElement.style.flexGrow = String(d);
+    b.querySelector('.dur').textContent = s ? fmtShort(d) : '';
+    b.classList.toggle('sel', i === sel);
+    b.setAttribute('aria-pressed', i === sel);
+    b.tabIndex = i === (sel >= 0 ? sel : 0) ? 0 : -1;
+    b.setAttribute('aria-label', `Photo ${i + 1} of ${tiles.length}` + (s ? `, ${fmt(s.start)} to ${fmt(s.end)}` : ''));
+  });
+  const has = state.story.length > 0;
+  $('#strip-wrap').hidden = !has;
+  $('#strip-empty').hidden = has;
+  $('#strip-tools').hidden = sel < 0;
+  if (sel >= 0) {
+    const s = shots[sel];
+    $('#sel-info').textContent = `Photo ${sel + 1} of ${state.story.length}` + (s ? ` · ${fmt(s.start)}–${fmt(s.end)}` : '');
+    $('#move-earlier').disabled = sel === 0;
+    $('#move-later').disabled = sel === state.story.length - 1;
+  }
+  drawStripPlayhead();
 }
 
-// ---------- 4. Captions ----------
+function moveStory(from, to, announce = true) {
+  if (to < 0 || to >= state.story.length || from === to) return;
+  const [p] = state.story.splice(from, 1);
+  state.story.splice(to, 0, p);
+  state.selected = p.url;
+  refresh();
+  if (announce) $('#strip-live').textContent = `Moved to position ${to + 1} of ${state.story.length}.`;
+}
+function removeFromStory(i) {
+  const [p] = state.story.splice(i, 1);
+  const next = state.story[Math.min(i, state.story.length - 1)];
+  state.selected = next?.url ?? null;
+  refresh();
+  $('#strip-live').textContent = `Removed photo ${i + 1}. ${state.story.length} left.`;
+  return p;
+}
+const selectedIndex = () => state.story.findIndex((p) => p.url === state.selected);
+const focusTile = (i) => $(`#strip .tile[data-index="${i}"]`)?.focus();
+
+$('#move-earlier').addEventListener('click', () => moveStory(selectedIndex(), selectedIndex() - 1));
+$('#move-later').addEventListener('click', () => moveStory(selectedIndex(), selectedIndex() + 1));
+$('#remove-photo').addEventListener('click', () => removeFromStory(selectedIndex()));
+
+const strip = $('#strip');
+strip.addEventListener('keydown', (e) => {
+  const b = e.target.closest('.tile');
+  if (!b) return;
+  const i = Number(b.dataset.index);
+  const n = state.story.length;
+  let handled = true;
+  if (e.altKey && e.key === 'ArrowLeft') { moveStory(i, i - 1); focusTile(Math.max(i - 1, 0)); }
+  else if (e.altKey && e.key === 'ArrowRight') { moveStory(i, i + 1); focusTile(Math.min(i + 1, n - 1)); }
+  else if (e.key === 'ArrowLeft' || e.key === 'ArrowRight' || e.key === 'Home' || e.key === 'End') {
+    const j = { ArrowLeft: Math.max(i - 1, 0), ArrowRight: Math.min(i + 1, n - 1), Home: 0, End: n - 1 }[e.key];
+    selectTile(j, 0);
+    focusTile(j);
+  } else if (e.key === 'Delete' || e.key === 'Backspace') { removeFromStory(i); focusTile(Math.min(i, state.story.length - 1)); }
+  else handled = false;
+  if (handled) e.preventDefault();
+});
+
+// Pick a tile and move the preview to a point inside it (0..1 across the tile).
+function selectTile(i, frac) {
+  const s = state.plan.shots[i];
+  state.selected = state.story[i]?.url ?? null;
+  if (s) {
+    audio.currentTime = range().start + s.start + Math.min(Math.max(frac, 0), 0.999) * (s.end - s.start);
+  }
+  renderStrip();
+  drawFrame();
+  drawPlayback();
+  save();
+}
+
+// Drag to reorder. Pointer events rather than HTML drag-and-drop: one code
+// path for mouse, trackpad and touch, and full control over what it looks like.
+let drag = null;
+let swallowClick = false;
+strip.addEventListener('pointerdown', (e) => {
+  const b = e.target.closest('.tile');
+  if (!b || e.button !== 0) return;
+  drag = { from: Number(b.dataset.index), tile: b, x0: e.clientX, y0: e.clientY, id: e.pointerId, active: false, to: null };
+});
+strip.addEventListener('pointermove', (e) => {
+  if (!drag || e.pointerId !== drag.id) return;
+  if (!drag.active) {
+    if (Math.hypot(e.clientX - drag.x0, e.clientY - drag.y0) < 6) return;
+    drag.active = true;
+    strip.setPointerCapture(e.pointerId);
+    drag.tile.classList.add('lifted');
+    drag.ghost = el('div', { className: 'ghost' });
+    drag.ghost.style.backgroundImage = drag.tile.style.backgroundImage;
+    document.body.append(drag.ghost);
+    document.body.classList.add('dragging');
+  }
+  drag.ghost.style.transform = `translate(${e.clientX - 36}px, ${e.clientY - 30}px)`;
+  // Where it would land: count the other tiles whose middle is left of the pointer.
+  const others = [...strip.querySelectorAll('.tile')].filter((t) => t !== drag.tile);
+  let to = 0;
+  for (const t of others) { const r = t.getBoundingClientRect(); if (e.clientX > r.left + r.width / 2) to++; }
+  drag.to = to;
+  const wrap = $('#strip-wrap');
+  const wr = wrap.getBoundingClientRect();
+  const edge = to < others.length ? others[to].parentElement.offsetLeft : (others.length ? others.at(-1).parentElement.offsetLeft + others.at(-1).parentElement.offsetWidth : 0);
+  const marker = $('#strip-marker');
+  marker.hidden = false;
+  marker.style.left = `${edge - 2}px`;
+  // Scroll a long strip when dragging near its edges.
+  if (e.clientX < wr.left + 30) wrap.scrollLeft -= 12;
+  else if (e.clientX > wr.right - 30) wrap.scrollLeft += 12;
+});
+const endDrag = (e, cancelled) => {
+  if (!drag || (e && e.pointerId !== drag.id)) return;
+  const d = drag;
+  drag = null;
+  if (!d.active) return;
+  // Some browsers follow a drag with a click on the tile; that click is not a
+  // click. Others don't, so only ignore one that arrives straight away.
+  swallowClick = true;
+  setTimeout(() => { swallowClick = false; });
+  d.tile.classList.remove('lifted');
+  d.ghost.remove();
+  document.body.classList.remove('dragging');
+  $('#strip-marker').hidden = true;
+  if (!cancelled && d.to !== null && d.to !== d.from) moveStory(d.from, d.to);
+  else { state.selected = state.story[d.from].url; renderStrip(); }
+  focusTile(selectedIndex());
+};
+strip.addEventListener('pointerup', (e) => endDrag(e, false));
+strip.addEventListener('pointercancel', (e) => endDrag(e, true));
+strip.addEventListener('click', (e) => {
+  const b = e.target.closest('.tile');
+  if (!b) return;
+  if (swallowClick) { swallowClick = false; return; }
+  const r = b.getBoundingClientRect();
+  selectTile(Number(b.dataset.index), e.detail === 0 ? 0 : (e.clientX - r.left) / r.width);
+});
+
+function drawStripPlayhead() {
+  const ph = $('#strip-playhead');
+  const { start, end } = range();
+  const t = Math.min(Math.max(audio.currentTime - start, 0), Math.max(end - start - 1e-3, 0)); // as drawFrame
+  const shots = state.plan.shots;
+  const i = shots.findIndex((s) => t >= s.start && t < s.end);
+  const cell = $(`#strip .tile[data-index="${i}"]`)?.parentElement;
+  ph.hidden = !cell;
+  if (!cell) return;
+  const s = shots[i];
+  ph.style.left = `${cell.offsetLeft + ((t - s.start) / (s.end - s.start)) * cell.offsetWidth}px`;
+}
+
+// ---------- Captions (optional, kept low-key) ----------
 $('#captions').addEventListener('change', async (e) => {
   const file = e.target.files[0];
-  if (!file) { state.cues = []; return; }
-  state.cues = parseCaptions(await file.text());
+  if (!file) return;
+  setCaptions({ name: file.name, text: await file.text() });
+  refresh();
+});
+function setCaptions(c) {
+  state.captions = c;
+  state.cues = c ? parseCaptions(c.text) : [];
+  if (!c) { setStatus('#captions-status', ''); return; }
   const { start, end } = range();
   const inside = clipCues(state.cues, start, end).length;
-  setStatus('#captions-status', `${state.cues.length} caption lines read, ${inside} fall inside the excerpt.`, state.cues.length === 0);
-});
+  setStatus('#captions-status', `${c.name}: ${state.cues.length} caption lines, ${inside} inside the excerpt.`, state.cues.length === 0);
+}
 
 // ---------- Live preview: same rules as the render, drawn with CSS ----------
 let layers = [];
+let layersKey = '';
 function buildLayers() {
+  const key = state.story.map((p) => p.url).join('\n');
+  if (key === layersKey && layers.length === state.plan.shots.length) {
+    layers.forEach((layer, i) => { layer.shot = state.plan.shots[i]; });
+    return;
+  }
+  layersKey = key;
   const box = $('#layers');
   layers = state.plan.shots.map((s, i) => {
     const p = state.story[s.id];
@@ -182,7 +451,6 @@ function drawFrame() {
   const { start, end } = range();
   const t = Math.min(Math.max(audio.currentTime - start, 0), Math.max(end - start, 0));
   $('#clock').textContent = `${fmt(t)} / ${fmt(end - start)}`;
-  $('#playhead').style.left = `${(t / (end - start || 1)) * 100}%`;
   const shots = state.plan.shots;
   const T = shots.length ? transitionFor(shots) : 0;
   layers.forEach((layer, i) => {
@@ -207,32 +475,144 @@ function drawFrame() {
   if (cue) cap.replaceChildren(el('span', { textContent: cue.text }));
   $('#ov-guest').textContent = $('#guest').value;
   $('#ov-sub').textContent = $('#subtitle').value;
+  drawStripPlayhead();
 }
 
+// "Play excerpt" plays only the selection and stops at its end. The episode
+// player above stays free: playing from there is just listening.
+let excerptPlay = false;
 $('#play').addEventListener('click', () => {
   const { start, end } = range();
   if (!audio.paused) { audio.pause(); return; }
+  if (!(end > start)) return;
   if (audio.currentTime < start || audio.currentTime >= end) audio.currentTime = start;
-  audio.play().catch((err) => setStatus('#lookup-status', `Audio would not play: ${err.message}`, true));
+  excerptPlay = true;
+  audio.play().catch((err) => { excerptPlay = false; setStatus('#lookup-status', `Audio would not play: ${err.message}`, true); });
 });
 audio.addEventListener('play', () => { $('#play').textContent = '❚❚ Pause'; tick(); });
-audio.addEventListener('pause', () => { $('#play').textContent = '▶ Play excerpt'; });
-audio.addEventListener('seeked', drawFrame);
+audio.addEventListener('pause', () => { $('#play').textContent = '▶ Play excerpt'; excerptPlay = false; });
+audio.addEventListener('seeked', () => { drawFrame(); drawPlayback(); });
 function tick() {
+  if (excerptPlay && audio.currentTime >= range().end) { audio.pause(); audio.currentTime = range().end; }
   drawFrame();
-  if (audio.currentTime >= range().end) audio.pause();
+  drawPlayback();
   if (!audio.paused) requestAnimationFrame(tick);
 }
-['#guest', '#subtitle'].forEach((s) => $(s).addEventListener('input', drawFrame));
+['#guest', '#subtitle'].forEach((s) => $(s).addEventListener('input', () => { drawFrame(); renderSummaries(); save(); }));
+document.querySelectorAll('input[name=quality]').forEach((r) => r.addEventListener('change', save));
+
+// ---------- Section summaries (shown beside each heading) ----------
+function renderSummaries() {
+  const { start, end } = range();
+  const len = end - start;
+  $('#sum-episode').textContent = state.episode ? episodeLabel(state.episode.title) : 'No episode yet';
+  $('#sum-excerpt').textContent = len > 0 ? `${fmtShort(start)}–${fmtShort(end)} · ${fmtShort(len)} selected` : 'Set a start and an end';
+  $('#sum-photos').textContent = state.library.length ? `${state.story.length} selected · ${state.library.length} available` : 'No photos yet';
+  $('#sum-story').textContent = state.story.length ? `${state.story.length} photo${state.story.length === 1 ? '' : 's'}${len > 0 ? ` · ${fmtShort(len)} total` : ''}` : 'Nothing to arrange yet';
+}
+// "Episode 29: Rustee Allen & Levi Seacer Jr. [P-FUNK]" → "Episode 29 · Rustee Allen & Levi Seacer Jr."
+function episodeLabel(title) {
+  if (!title) return 'Untitled episode';
+  const n = title.match(/^\s*ep(?:isode)?\.?\s*(\d+)\s*[:.\-–—]?\s*/i);
+  const rest = title.slice(n ? n[0].length : 0).replace(/\s*\[[^\]]*\]\s*$/, '').trim();
+  return n ? `Episode ${n[1]} · ${rest}` : rest || title;
+}
+SECTIONS.forEach((id) => $(`#${id}`).addEventListener('toggle', save));
+
+// ---------- Autosave ----------
+// One project, kept in this browser's localStorage under SAVE_KEY. Written a
+// moment after every change; read back on load. See README "Saved work".
+const SAVE_KEY = 'pocketace.project.v1';
+let saveTimer = null;
+let restoring = false;
+function save() {
+  if (restoring) return;
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(writeSave, 300);
+}
+function writeSave() {
+  const project = {
+    v: 1,
+    savedAt: new Date().toISOString(),
+    episodeUrl: $('#episode-url').value,
+    episode: state.episode,
+    audioUrl: $('#audio-url').value,
+    start: $('#start').value,
+    end: $('#end').value,
+    library: state.library,
+    story: state.story.map((p) => ({ url: p.url })),
+    selected: state.selected,
+    guest: $('#guest').value,
+    subtitle: $('#subtitle').value,
+    quality: document.querySelector('input[name=quality]:checked').value,
+    captions: state.captions && state.captions.text.length < 1e6 ? state.captions : null,
+    open: Object.fromEntries(SECTIONS.map((id) => [id, $(`#${id}`).open])),
+    playhead: audio.currentTime || 0,
+  };
+  try {
+    localStorage.setItem(SAVE_KEY, JSON.stringify(project));
+    setSaved(`Saved ${new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`);
+  } catch (err) {
+    setSaved('Not saved: this browser is blocking storage', true);
+  }
+}
+function setSaved(text, bad = false) { const n = $('#save-status'); n.textContent = text; n.classList.toggle('bad', bad); }
+
+function restore() {
+  let p = null;
+  try { p = JSON.parse(localStorage.getItem(SAVE_KEY) || 'null'); } catch { p = null; }
+  if (!p || p.v !== 1) return false;
+  restoring = true;
+  $('#episode-url').value = p.episodeUrl || '';
+  state.episode = p.episode || null;
+  state.library = Array.isArray(p.library) ? p.library : [];
+  state.story = Array.isArray(p.story) ? p.story.filter((s) => s && s.url).map((s) => ({ url: s.url })) : [];
+  state.selected = p.selected || null;
+  $('#start').value = p.start ?? '0:00.0';
+  $('#end').value = p.end ?? '1:00.0';
+  $('#guest').value = p.guest || '';
+  $('#subtitle').value = p.subtitle || '';
+  const q = document.querySelector(`input[name=quality][value="${p.quality}"]`);
+  if (q) q.checked = true;
+  if (p.captions?.text) setCaptions(p.captions);
+  for (const id of SECTIONS) if (p.open && id in p.open) $(`#${id}`).open = !!p.open[id];
+  if (p.audioUrl) {
+    setAudio(p.audioUrl);
+    if (p.playhead) audio.addEventListener('loadedmetadata', () => { audio.currentTime = p.playhead; }, { once: true });
+  }
+  restoring = false;
+  setSaved(`Restored your work from ${new Date(p.savedAt).toLocaleString([], { weekday: 'short', hour: 'numeric', minute: '2-digit' })}`);
+  return true;
+}
+
+$('#start-over').addEventListener('click', () => {
+  if (!confirm('Start over? This clears the episode, excerpt and story saved in this browser.')) return;
+  clearTimeout(saveTimer);
+  try { localStorage.removeItem(SAVE_KEY); } catch {}
+  restoring = true; // nothing more gets saved on the way out
+  location.reload();
+});
 
 // ---------- Render ----------
+let renderBlocked = null;
+async function checkRenderer() {
+  try {
+    const { render } = await (await fetch('/api/health')).json();
+    renderBlocked = render.ok ? null : render.advice;
+    if (render.ok && !render.captions) $('#captions-box').dataset.unavailable = '1';
+  } catch { renderBlocked = null; }
+  $('#render-blocked').hidden = !renderBlocked;
+  $('#render-blocked').textContent = renderBlocked ? `Videos can't be made on this computer yet. ${renderBlocked}` : '';
+  $('#render').disabled = !!renderBlocked;
+}
+
 $('#render').addEventListener('click', async () => {
   const { start, end } = range();
   const body = {
     audioUrl: $('#audio-url').value.trim(), start, end,
-    photos: state.story.map((p) => ({ url: p.url, pin: rel(p.pin) })),
+    photos: state.story.map((p) => ({ url: p.url })), // strip order is play order
     guest: $('#guest').value, subtitle: $('#subtitle').value,
-    captions: state.cues.length ? (await $('#captions').files[0]?.text()) : null,
+    captions: state.cues.length ? state.captions.text : null,
     quality: document.querySelector('input[name=quality]:checked').value,
   };
   $('#render').disabled = true;
@@ -247,7 +627,7 @@ $('#render').addEventListener('click', async () => {
   } catch (err) {
     setStatus('#job-status', err.message, true);
   } finally {
-    $('#render').disabled = false;
+    $('#render').disabled = !!renderBlocked;
   }
 });
 
@@ -270,9 +650,17 @@ async function poll(id) {
 }
 
 // ---------- helpers ----------
-function rel(pin) { return pin == null ? null : pin - range().start; }
 function el(tag, props = {}) { return Object.assign(document.createElement(tag), props); }
 function setStatus(sel, text, bad = false) { const n = $(sel); n.textContent = text; n.classList.toggle('bad', bad); }
 function titleCase(s) { return s.toLowerCase().replace(/(^|[\s/-])(\p{L})/gu, (m, a, b) => a + b.toUpperCase()); }
+// 754.3 → "12:34" (summaries and tiles; the fields keep tenths)
+function fmtShort(sec) {
+  if (!Number.isFinite(sec)) return '--:--';
+  const s = Math.floor(Math.max(0, sec) + 1e-6);
+  const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), r = String(s % 60).padStart(2, '0');
+  return h ? `${h}:${String(m).padStart(2, '0')}:${r}` : `${m}:${r}`;
+}
 
+restore();
 refresh();
+checkRenderer();

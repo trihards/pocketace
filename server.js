@@ -1,5 +1,6 @@
 // PocketAce prototype server. Node 22+ and FFmpeg; no npm dependencies.
 //
+//   GET  /api/health            can this machine render? (FFmpeg found, filters present)
 //   GET  /api/episode?url=…     look up an episode page (title, photos, audio)
 //   POST /api/render            queue a render, returns {id}
 //   GET  /api/jobs/:id          status + progress
@@ -19,6 +20,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { lookupEpisode } from './lib/extract.js';
 import { renderVideo, probeImage } from './lib/render.js';
+import { findFFmpeg, captionsAdvice } from './lib/ffmpeg.js';
 import { schedule } from './public/schedule.js';
 import { parseCaptions } from './public/captions.js';
 
@@ -46,6 +48,13 @@ const jobs = new Map();
 const queue = [];
 let busy = false;
 
+// Check FFmpeg before anything else, so a missing filter shows up here and
+// in the app, not halfway through someone's first render.
+const ff = await findFFmpeg();
+console.log(ff.ok
+  ? `FFmpeg ${ff.version} at ${ff.ffmpeg} has everything needed${ff.captions ? '' : ' (no libass: captions files are off)'}.`
+  : `\n  Rendering is NOT available.\n  ${ff.advice}\n`);
+
 await rm(WORK, { recursive: true, force: true });
 await mkdir(path.join(WORK, 'cache'), { recursive: true });
 setInterval(sweep, 10 * 60e3).unref();
@@ -53,6 +62,7 @@ setInterval(sweep, 10 * 60e3).unref();
 http.createServer(async (req, res) => {
   try {
     const url = new URL(req.url, 'http://x');
+    if (req.method === 'GET' && url.pathname === '/api/health') return send(res, 200, { render: { ok: ff.ok, ffmpeg: ff.ffmpeg, version: ff.version, missing: ff.missing, captions: ff.captions, advice: ff.advice } });
     if (req.method === 'GET' && url.pathname === '/api/episode') return await episode(url, res);
     if (req.method === 'POST' && url.pathname === '/api/render') return await startRender(req, res);
     const m = url.pathname.match(/^\/api\/jobs\/([\w-]+)(\/video)?$/);
@@ -60,8 +70,13 @@ http.createServer(async (req, res) => {
     if (req.method === 'GET') return await serveStatic(url.pathname, res);
     send(res, 405, { error: 'Method not allowed' });
   } catch (err) {
+    // Browsers cancel media range requests all the time (seeking, Safari's
+    // probing); that is not an error. Once headers are out, all we can do is
+    // close the socket. Answering again would throw and take the server down.
+    if (err.code === 'ERR_STREAM_PREMATURE_CLOSE') return;
     console.error(err);
-    send(res, 500, { error: err.message });
+    if (res.headersSent) res.destroy();
+    else send(res, 500, { error: err.message });
   }
 }).listen(PORT, () => console.log(`PocketAce on http://localhost:${PORT}  (work dir ${WORK}, allowed hosts: ${ALLOWED.join(', ')})`));
 
@@ -72,6 +87,7 @@ async function episode(url, res) {
 }
 
 async function startRender(req, res) {
+  if (!ff.ok) return send(res, 503, { error: ff.advice });
   const body = JSON.parse(await readBody(req, 2e6));
   const start = Number(body.start), end = Number(body.end);
   const problems = [];
@@ -81,11 +97,13 @@ async function startRender(req, res) {
   const photos = Array.isArray(body.photos) ? body.photos.slice(0, MAX_PHOTOS) : [];
   if (!photos.length) problems.push('Pick at least one photo.');
   photos.forEach((p, i) => { if (!allowed(p.url)) problems.push(`Photo ${i + 1} is not on an allowed host.`); });
+  if (body.captions && !ff.captions) problems.push(captionsAdvice(ff));
   if (problems.length) return send(res, 400, { error: problems.join(' ') });
 
   // The server re-runs the same scheduler the browser used, so the render
-  // matches the preview even if the request was tampered with.
-  const plan = schedule({ duration: end - start, photos: photos.map((p, i) => ({ id: `p${i}`, pin: p.pin })) });
+  // matches the preview even if the request was tampered with. Photos play
+  // in exactly the order they arrive: the order of Ace's story strip.
+  const plan = schedule({ duration: end - start, photos: photos.map((p, i) => ({ id: `p${i}` })) });
   const id = randomUUID();
   const job = {
     id, status: 'queued', progress: 0, error: null, warnings: plan.warnings, createdAt: Date.now(), dir: path.join(WORK, id),

@@ -10,6 +10,7 @@
     "test": "node --test test/*.test.js",
     "probe": "node tools/probe.js",
     "demo": "node tools/demo-render.js",
-    "sweep": "node tools/sweep.js"
+    "sweep": "node tools/sweep.js",
+    "doctor": "node tools/doctor.js"
   }
 }

@@ -12,62 +12,105 @@
 <header class="top">
   <span class="mark">Aced Out</span>
   <span class="product">PocketAce · story maker <em>prototype</em></span>
+  <span class="spacer"></span>
+  <span id="save-status" class="save" role="status" aria-live="polite"></span>
+  <button id="start-over" type="button" class="quiet">Start over</button>
 </header>
 
 <main class="layout">
   <section class="steps">
-    <article class="step" id="step-episode">
-      <h2><span class="n">1</span> Episode</h2>
-      <form id="lookup" class="row">
-        <input id="episode-url" type="url" placeholder="https://www.acedoutpodcast.com/episodes/32/linda-shider" value="https://www.acedoutpodcast.com/episodes/32/linda-shider" required>
-        <button type="submit" class="primary">Get episode</button>
-      </form>
-      <p id="lookup-status" class="status" role="status"></p>
-      <details id="lookup-details" hidden><summary>What the lookup found</summary><pre id="lookup-report"></pre></details>
-      <div class="fields">
-        <label>Guest name on screen <input id="guest" type="text" placeholder="Linda Shider"></label>
-        <label>Line underneath <input id="subtitle" type="text" placeholder="Ep 32 · P-Funk / Garry Shider"></label>
-      </div>
-    </article>
-
-    <article class="step" id="step-excerpt">
-      <h2><span class="n">2</span> Excerpt</h2>
-      <label class="wide">Episode audio <input id="audio-url" type="url" placeholder="Found automatically, or paste the MP3 address"></label>
-      <audio id="audio" controls preload="metadata"></audio>
-      <div class="excerpt">
-        <div class="stamp">
-          <span class="lbl">Start</span>
-          <input id="start" type="text" value="0:00.0" inputmode="decimal">
-          <button type="button" data-set="start">Use current time</button>
+    <details class="step" id="step-episode" open>
+      <summary><h2><span class="n">1</span> Episode</h2><span class="sum" id="sum-episode"></span></summary>
+      <div class="body">
+        <form id="lookup" class="row">
+          <input id="episode-url" type="url" placeholder="https://www.acedoutpodcast.com/episodes/32/linda-shider" value="https://www.acedoutpodcast.com/episodes/32/linda-shider" required aria-label="Episode page address">
+          <button type="submit" class="primary">Get episode</button>
+        </form>
+        <p id="lookup-status" class="status" role="status"></p>
+        <details id="lookup-details" class="sub" hidden><summary>What the lookup found</summary><pre id="lookup-report"></pre></details>
+        <div class="fields">
+          <label>Guest name on screen <input id="guest" type="text" placeholder="Linda Shider"></label>
+          <label>Line underneath <input id="subtitle" type="text" placeholder="Ep 32 · P-Funk / Garry Shider"></label>
         </div>
-        <div class="stamp">
-          <span class="lbl">End</span>
-          <input id="end" type="text" value="1:00.0" inputmode="decimal">
-          <button type="button" data-set="end">Use current time</button>
-        </div>
-        <div class="stamp len"><span class="lbl">Length</span><output id="length">1:00.0</output></div>
       </div>
-    </article>
+    </details>
 
-    <article class="step" id="step-photos">
-      <h2><span class="n">3</span> Photos</h2>
-      <p class="hint">Tap photos to add them to the story, in the order you want. Pin one to make it appear at the moment the audio is at.</p>
-      <div id="gallery" class="gallery"><p class="empty">Photos from the episode page appear here.</p></div>
-      <form id="add-photo" class="row">
-        <input id="photo-url" type="url" placeholder="Add a photo by its web address">
-        <button type="submit">Add</button>
-      </form>
-      <h3>The story <small id="story-count"></small></h3>
-      <ol id="story" class="story"></ol>
-      <ul id="warnings" class="warnings"></ul>
-    </article>
+    <details class="step" id="step-excerpt" open>
+      <summary><h2><span class="n">2</span> Excerpt</h2><span class="sum" id="sum-excerpt"></span></summary>
+      <div class="body">
+        <label class="wide">Episode audio <input id="audio-url" type="url" placeholder="Found automatically, or paste the MP3 address"></label>
+        <audio id="audio" controls preload="metadata"></audio>
+        <!-- The whole episode, left to right. Gold = the excerpt; white line = where playback is. -->
+        <div id="range" class="range off">
+          <div class="rtrack"><div id="range-sel" class="rsel"></div></div>
+          <div id="range-play" class="rplay"></div>
+          <div id="h-start" class="rhandle start" role="slider" tabindex="0" aria-label="Excerpt start"><span class="tip"></span></div>
+          <div id="h-end" class="rhandle end" role="slider" tabindex="0" aria-label="Excerpt end"><span class="tip"></span></div>
+        </div>
+        <div class="rscale"><span>0:00</span><span id="range-note" class="hint">Drag the gold handles. Hold Shift while dragging for fine moves.</span><span id="range-dur"></span></div>
+        <div class="excerpt">
+          <div class="stamp">
+            <span class="lbl">Start</span>
+            <input id="start" type="text" value="0:00.0" inputmode="decimal" aria-label="Start time">
+            <div class="stamp-tools">
+              <button type="button" data-set="start">Use current time</button>
+              <button type="button" class="nudge" data-nudge="start" data-by="-1" aria-label="Start one second earlier">−1s</button>
+              <button type="button" class="nudge" data-nudge="start" data-by="1" aria-label="Start one second later">+1s</button>
+            </div>
+          </div>
+          <div class="stamp">
+            <span class="lbl">End</span>
+            <input id="end" type="text" value="1:00.0" inputmode="decimal" aria-label="End time">
+            <div class="stamp-tools">
+              <button type="button" data-set="end">Use current time</button>
+              <button type="button" class="nudge" data-nudge="end" data-by="-1" aria-label="End one second earlier">−1s</button>
+              <button type="button" class="nudge" data-nudge="end" data-by="1" aria-label="End one second later">+1s</button>
+            </div>
+          </div>
+          <div class="stamp len"><span class="lbl">Length</span><output id="length">1:00.0</output></div>
+        </div>
+      </div>
+    </details>
 
-    <article class="step" id="step-captions">
-      <h2><span class="n">4</span> Captions <small>optional</small></h2>
-      <p class="hint">Use an SRT or VTT file timed to the full episode. Only the lines inside the excerpt are used.</p>
-      <input id="captions" type="file" accept=".srt,.vtt,text/vtt,application/x-subrip">
-      <p id="captions-status" class="status"></p>
-    </article>
+    <details class="step" id="step-photos" open>
+      <summary><h2><span class="n">3</span> Photos</h2><span class="sum" id="sum-photos"></span></summary>
+      <div class="body">
+        <p class="hint">Tap photos to add them to your story. Tap again to take one out.</p>
+        <div id="gallery" class="gallery"><p class="empty">Photos from the episode page appear here.</p></div>
+        <form id="add-photo" class="row">
+          <input id="photo-url" type="url" placeholder="Add a photo by its web address" aria-label="Photo address">
+          <button type="submit">Add</button>
+        </form>
+      </div>
+    </details>
+
+    <details class="step" id="step-story" open>
+      <summary><h2><span class="n">4</span> Arrange your story</h2><span class="sum" id="sum-story"></span></summary>
+      <div class="body">
+        <p class="hint">Drag photos to change the order. The excerpt is shared out evenly, so wider tiles stay on screen longer. Click a tile to jump there in the preview.</p>
+        <div class="strip-wrap" id="strip-wrap">
+          <ol id="strip" class="strip" aria-label="Story, in playback order. Arrow keys choose a photo; Option or Alt with an arrow key moves it."></ol>
+          <div id="strip-playhead" class="playhead" hidden></div>
+          <div id="strip-marker" class="drop-marker" hidden></div>
+        </div>
+        <p id="strip-empty" class="hint">Your story appears here once you pick photos.</p>
+        <div id="strip-tools" class="strip-tools" hidden>
+          <span id="sel-info"></span>
+          <span class="spacer"></span>
+          <button type="button" id="move-earlier">◀ Earlier</button>
+          <button type="button" id="move-later">Later ▶</button>
+          <button type="button" id="remove-photo">Remove</button>
+        </div>
+        <p id="strip-live" class="sr-only" aria-live="polite"></p>
+        <ul id="warnings" class="warnings"></ul>
+        <details class="sub" id="captions-box">
+          <summary>Captions file <small>(optional)</small></summary>
+          <p class="hint">An SRT or VTT file timed to the full episode. Only the lines inside the excerpt are used.</p>
+          <input id="captions" type="file" accept=".srt,.vtt,text/vtt,application/x-subrip">
+          <p id="captions-status" class="status"></p>
+        </details>
+      </div>
+    </details>
   </section>
 
   <aside class="preview-col">
@@ -84,8 +127,8 @@
       <button id="play" type="button" class="primary">▶ Play excerpt</button>
       <output id="clock">0:00.0</output>
     </div>
-    <div id="timeline" class="timeline" title="Click to jump"><div id="playhead" class="playhead"></div></div>
     <div class="render">
+      <p id="render-blocked" class="blocked" role="alert" hidden></p>
       <fieldset class="quality">
         <label><input type="radio" name="quality" value="draft" checked> Quick draft (540×960)</label>
         <label><input type="radio" name="quality" value="final"> Final 1080×1920</label>

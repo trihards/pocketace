@@ -12,6 +12,10 @@ import path from 'node:path';
 import { schedule } from '../public/schedule.js';
 import { parseCaptions } from '../public/captions.js';
 import { renderVideo, probeImage } from '../lib/render.js';
+import { findFFmpeg } from '../lib/ffmpeg.js';
+
+const ff = await findFFmpeg();
+if (!ff.ok) { console.error(ff.advice); process.exit(1); }
 
 const seconds = Number(process.argv[2] || 45);
 const quality = process.argv[3] || 'draft';
@@ -30,22 +34,22 @@ const sources = [
 const photos = new Map();
 sources.forEach(([src, label], i) => {
   const file = path.join(fx, `photo${i + 1}.jpg`);
-  execFileSync('ffmpeg', ['-v', 'error', '-y', '-f', 'lavfi', '-i', `${src},drawtext=text='TEST PHOTO ${i + 1}  ${label}':fontsize=h/14:fontcolor=white:box=1:boxcolor=black@0.6:x=(w-tw)/2:y=(h-th)/2`, '-frames:v', '1', file]);
+  execFileSync(ff.ffmpeg, ['-v', 'error', '-y', '-f', 'lavfi', '-i', `${src},drawtext=text='TEST PHOTO ${i + 1}  ${label}':fontsize=h/14:fontcolor=white:box=1:boxcolor=black@0.6:x=(w-tw)/2:y=(h-th)/2`, '-frames:v', '1', file]);
   photos.set(`p${i + 1}`, { file });
 });
 for (const p of photos.values()) Object.assign(p, await probeImage(p.file));
 
 // 3 minutes of synthetic "episode": a slow chord with a click track, so cuts and sync are audible.
 const audio = path.join(fx, 'episode.mp3');
-execFileSync('ffmpeg', ['-v', 'error', '-y', '-f', 'lavfi', '-i', 'sine=f=220:d=180', '-f', 'lavfi', '-i', 'sine=f=277:d=180', '-f', 'lavfi', '-i', 'sine=f=1000:d=180:beep_factor=4',
+execFileSync(ff.ffmpeg, ['-v', 'error', '-y', '-f', 'lavfi', '-i', 'sine=f=220:d=180', '-f', 'lavfi', '-i', 'sine=f=277:d=180', '-f', 'lavfi', '-i', 'sine=f=1000:d=180:beep_factor=4',
   '-filter_complex', '[0][1][2]amix=inputs=3,volume=0.6,aformat=channel_layouts=stereo', '-c:a', 'libmp3lame', '-b:a', '128k', audio]);
 
 const start = 30, end = start + seconds;
 const srt = `1\n00:00:31,000 --> 00:00:35,500\nShe called them the black Rolling Stones.\n\n2\n00:00:36,000 --> 00:00:41,000\n(Sample caption. Ace would supply real ones\nas an SRT or VTT file.)\n`;
 const ids = [...photos.keys()];
-const pick = ids.map((id) => ({ id, pin: id === 'p5' ? Math.min(20, seconds / 2) : null }));
+const pick = ids.map((id) => ({ id }));
 const { shots, warnings } = schedule({ duration: end - start, photos: pick });
-console.log('Shots:'); shots.forEach((s) => console.log(`  ${s.id}${s.pinned ? ' (pinned)' : ''}  ${s.start.toFixed(2)} → ${s.end.toFixed(2)}`));
+console.log('Shots:'); shots.forEach((s) => console.log(`  ${s.id}  ${s.start.toFixed(2)} → ${s.end.toFixed(2)}`));
 warnings.forEach((w) => console.log('  ! ' + w));
 
 const t0 = Date.now();

@@ -8,15 +8,18 @@ import { execFileSync } from 'node:child_process';
 import { mkdtempSync, readFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { tools } from '../lib/ffmpeg.js';
+
+const { ffmpeg } = await tools();
 
 export function startFixtureSite() {
   const dir = mkdtempSync(path.join(os.tmpdir(), 'pocketace-site-'));
-  const make = (name, src) => execFileSync('ffmpeg', ['-v', 'error', '-y', '-f', 'lavfi', '-i', src, '-frames:v', '1', path.join(dir, name)]);
+  const make = (name, src) => execFileSync(ffmpeg, ['-v', 'error', '-y', '-f', 'lavfi', '-i', src, '-frames:v', '1', path.join(dir, name)]);
   make('logo.png', 'color=gold:s=200x80');
   make('a.jpg', 'mandelbrot=s=1800x1200');
   make('b.jpg', 'testsrc2=s=1080x1620');
   make('c.jpg', 'smptehdbars=s=1600x900');
-  execFileSync('ffmpeg', ['-v', 'error', '-y', '-f', 'lavfi', '-i', 'sine=f=330:d=40', '-c:a', 'libmp3lame', '-b:a', '96k', path.join(dir, 'ep32.mp3')]);
+  execFileSync(ffmpeg, ['-v', 'error', '-y', '-f', 'lavfi', '-i', 'sine=f=330:d=40', '-c:a', 'libmp3lame', '-b:a', '96k', path.join(dir, 'ep32.mp3')]);
 
   let origin = '';
   const article = () => `
