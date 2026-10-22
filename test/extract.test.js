@@ -40,3 +40,16 @@ test('guest name guess', () => {
   assert.equal(guessGuest('Ep 32: Linda Shider [P-FUNK/GARRY SHIDER]'), 'Linda Shider');
   assert.equal(guessGuest('Episode 2: Amuka, Bride of Funkenstein'), 'Amuka, Bride of Funkenstein');
 });
+
+test('an episode thumbnail that repeats a body photo under a new path is folded into it', async () => {
+  const cdn = 'https://images.squarespace-cdn.com/content/v1/site';
+  const page = (thumb) => async (url) => {
+    if (url.includes('format=json')) return { status: 200, text: JSON.stringify({ item: { title: 'Ep 1: X', assetUrl: `${cdn}/111-AAA/${thumb}`, body: `<img data-src="${cdn}/222/HERO.png" data-image-dimensions="864x1332"><img data-src="${cdn}/333/stage.jpg">` } }) };
+    return { status: 404, text: '' };
+  };
+  const twin = await lookupEpisode('https://example.com/episodes/1/x', { fetchText: page('HERO.jpg') });
+  assert.deepEqual(twin.images.map((i) => i.key.split('/').pop()), ['HERO.png', 'stage.jpg']);
+  assert.ok(twin.images[0].sources.includes('json:assetUrl'));
+  const own = await lookupEpisode('https://example.com/episodes/1/x', { fetchText: page('cover.jpg') });
+  assert.deepEqual(own.images.map((i) => i.key.split('/').pop()), ['cover.jpg', 'HERO.png', 'stage.jpg']);
+});

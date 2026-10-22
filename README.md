@@ -8,11 +8,12 @@ Paste an episode page address, set a start and an end, tap photos in the order y
 
 - All 33 feed items look up cleanly from all three sources (Squarespace JSON, page HTML, RSS). Audio is found for all 32 episodes; the 33rd item is a tribute post with no audio.
 - Audio: 30 episodes are MP3s in the S3 bucket `www.davekostiuk.com` (us-west-1), 2 are on Squarespace. They serve byte ranges, so browsers can seek. Ep 32 is 118 MB, 82 min.
-- Photos: 469 across the catalogue. Of the 441 with sizes in the page markup, the median long side is 726 px and 341 are under 1080 px. The render never enlarges a photo more than 25% (`public/look.js`), so small photos sit smaller on screen instead of going soft.
+- Photos: 446 across the catalogue (469 before folding episode thumbnails into the body photo they repeat; 23 of 27 thumbnails are such twins, matched by file name). Of the 441 with sizes in the page markup, the median long side is 726 px and 341 are under 1080 px. The render never enlarges a photo more than 25% (`public/look.js`), so small photos sit smaller on screen instead of going soft.
 - Transcripts: none. Episode pages carry long narrative show notes (Ep 32: ~1,500 words), credits and a track list.
 - Loudness: episodes are mastered quiet (Ep 32: −29 LUFS). Renders are normalised to −16 LUFS.
 - A real render (Ep 32 audio from S3, 60 s, 1080×1920) took 54 s including the 118 MB download, and the cut is sample-accurate.
-- Not yet checked: the photo files themselves (`images.squarespace-cdn.com` was still blocked in the dev sandbox). Their sizes come from Squarespace's `data-image-dimensions` markup.
+- Photo files (all 469 downloaded and decoded, 22 Oct 2026): every one downloads, with `CORS: *`. The markup sizes are exact: 429 match, 12 differ only because the CDN caps at 2500 px, none are rotated. The CDN content-negotiates, so the server receives WebP for 445 of them, which FFmpeg 6.1 reads fine. Two are GIFs (Ep 23, Ep 26), which crashed the whole render until `probeImage` began swapping them for a PNG still. 66 PNG/WebP files have transparency, mostly a one-pixel edge; the render flattens it onto black and the preview now shows the same.
+- A live end-to-end render through the server (Ep 26, all 16 photos including the GIF, 2 min at 1080×1920) took 129 s including the audio download: exactly 120.000 s, −16.0 LUFS.
 
 ## Run it
 

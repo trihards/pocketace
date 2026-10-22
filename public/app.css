@@ -82,7 +82,7 @@ audio { width: 100%; }
 .stage { position: relative; width: 100%; aspect-ratio: 9 / 16; overflow: hidden; border-radius: 14px; background: #000; container-type: inline-size; }
 .layer { position: absolute; inset: 0; opacity: 0; }
 .layer .bgimg { position: absolute; inset: -6%; width: 112%; height: 112%; object-fit: cover; filter: blur(5cqw) brightness(.72) saturate(.8); }
-.layer .fg { position: absolute; overflow: hidden; }
+.layer .fg { position: absolute; overflow: hidden; background: #000; } /* the render flattens transparent PNG/WebP onto black */
 .layer .fg img { width: 100%; height: 100%; object-fit: cover; transform-origin: 0 0; display: block; }
 .shade { position: absolute; inset: 0; pointer-events: none;
   background: linear-gradient(to bottom, #0009 0%, #0000 16%, #0000 60%, #000d 100%); }
