@@ -1,6 +1,6 @@
 import { schedule, fmt, parseTime } from './schedule.js';
 import { parseCaptions, clipCues } from './captions.js';
-import { FILL_MAX_ASPECT, FRAME, motion, transitionFor } from './look.js';
+import { motion, placement, transitionFor } from './look.js';
 
 const $ = (s) => document.querySelector(s);
 const state = {
@@ -92,8 +92,8 @@ function renderGallery() {
     b.append(el('img', { src: p.thumb, alt: '', loading: 'lazy' }));
     if (idx >= 0) b.append(el('span', { className: 'badge', textContent: idx + 1 }));
     if (p.width) {
-      const low = Math.min(p.width, p.height) < 900;
-      b.append(el('span', { className: `res${low ? ' low' : ''}`, textContent: `${p.width}×${p.height}`, title: low ? 'Low resolution: may look soft in the final video' : '' }));
+      const low = Math.max(p.width, p.height) < 800;
+      b.append(el('span', { className: `res${low ? ' low' : ''}`, textContent: `${p.width}×${p.height}`, title: low ? 'Small photo: it will appear smaller on screen' : '' }));
     }
     b.addEventListener('click', () => {
       if (idx >= 0) state.story.splice(idx, 1); else state.story.push({ url: p.url, pin: null });
@@ -160,7 +160,7 @@ function buildLayers() {
     const layer = el('div', { className: 'layer' });
     const fg = el('div', { className: 'fg' });
     const img = el('img', { src: p.url, alt: '' });
-    img.addEventListener('load', () => { layer.dataset.aspect = img.naturalWidth / img.naturalHeight; place(layer); drawFrame(); }, { once: true });
+    img.addEventListener('load', () => { layer.dataset.w = img.naturalWidth; layer.dataset.h = img.naturalHeight; place(layer); drawFrame(); }, { once: true });
     fg.append(img);
     layer.append(el('img', { className: 'bgimg', src: thumb(p.url), alt: '' }), fg);
     layer.shot = s; layer.index = i;
@@ -170,15 +170,12 @@ function buildLayers() {
 }
 
 function place(layer) {
-  const a = Number(layer.dataset.aspect) || 1.5;
+  const p = placement(Number(layer.dataset.w), Number(layer.dataset.h));
   const fg = layer.querySelector('.fg');
-  const fill = a < FILL_MAX_ASPECT;
-  layer.querySelector('.bgimg').hidden = fill;
-  if (fill) { Object.assign(fg.style, { left: '0', top: '0', width: '100%', height: '100%' }); return; }
-  const W = 1080, H = 1920;
-  let fw = W - 2 * FRAME.margin, fh = fw / a;
-  if (fh > H * FRAME.maxHeight) { fh = H * FRAME.maxHeight; fw = fh * a; }
-  Object.assign(fg.style, { left: `${((W - fw) / 2 / W) * 100}%`, top: `${((H * FRAME.centerY - fh / 2) / H) * 100}%`, width: `${(fw / W) * 100}%`, height: `${(fh / H) * 100}%` });
+  layer.querySelector('.bgimg').hidden = p.fill;
+  if (p.fill) { Object.assign(fg.style, { left: '0', top: '0', width: '100%', height: '100%' }); return; }
+  const pct = (v, of) => `${(v / of) * 100}%`;
+  Object.assign(fg.style, { left: pct(p.x, 1080), top: pct(p.y, 1920), width: pct(p.w, 1080), height: pct(p.h, 1920) });
 }
 
 function drawFrame() {

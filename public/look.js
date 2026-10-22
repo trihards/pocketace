@@ -5,6 +5,22 @@
 // Everything else is shown whole, framed over a blurred copy of itself.
 export const FILL_MAX_ASPECT = 0.62;
 
+// Never enlarge a photo by more than this. Most of the Aced Out archive is
+// small (median long side ~730px across 441 photos), so small photos sit
+// smaller on screen instead of being blown up soft.
+export const MAX_UPSCALE = 1.25;
+
+// Where a photo sits on the 1080x1920 canvas: {fill} or {x,y,w,h} in px.
+export function placement(width, height) {
+  const a = width / height;
+  if (a < FILL_MAX_ASPECT && height * MAX_UPSCALE >= 1920) return { fill: true };
+  let w = Math.min(1080 - 2 * FRAME.margin, width * MAX_UPSCALE);
+  let h = w / a;
+  const maxH = Math.min(1920 * FRAME.maxHeight, height * MAX_UPSCALE);
+  if (h > maxH) { h = maxH; w = h * a; }
+  return { fill: false, x: (1080 - w) / 2, y: 1920 * FRAME.centerY - h / 2, w, h };
+}
+
 // Framed photos: side margin (px at 1080 wide), max height and vertical centre
 // as fractions of the frame height.
 export const FRAME = { margin: 40, maxHeight: 0.6, centerY: 0.43 };

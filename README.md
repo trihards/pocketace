@@ -4,7 +4,15 @@ Proof of concept for Ace Alan's [Aced Out Podcast](https://www.acedoutpodcast.co
 
 Paste an episode page address, set a start and an end, tap photos in the order you want, optionally pin a photo to a moment, preview, and render. All photo timing, framing, motion and transitions follow fixed rules. There is no AI or speech recognition anywhere in the app.
 
-**Status:** prototype. The render pipeline, scheduler, captions and server are working and tested. Episode lookup is written for Squarespace's standard page/JSON/RSS conventions but has **not yet been run against the live acedoutpodcast.com site**. The development sandbox could not reach it. Run `npm run probe` (below) to check that first.
+**Status:** prototype. Verified against the live site on 22 Oct 2026 (`npm run sweep`):
+
+- All 33 feed items look up cleanly from all three sources (Squarespace JSON, page HTML, RSS). Audio is found for all 32 episodes; the 33rd item is a tribute post with no audio.
+- Audio: 30 episodes are MP3s in the S3 bucket `www.davekostiuk.com` (us-west-1), 2 are on Squarespace. They serve byte ranges, so browsers can seek. Ep 32 is 118 MB, 82 min.
+- Photos: 469 across the catalogue. Of the 441 with sizes in the page markup, the median long side is 726 px and 341 are under 1080 px. The render never enlarges a photo more than 25% (`public/look.js`), so small photos sit smaller on screen instead of going soft.
+- Transcripts: none. Episode pages carry long narrative show notes (Ep 32: ~1,500 words), credits and a track list.
+- Loudness: episodes are mastered quiet (Ep 32: −29 LUFS). Renders are normalised to −16 LUFS.
+- A real render (Ep 32 audio from S3, 60 s, 1080×1920) took 54 s including the 118 MB download, and the cut is sample-accurate.
+- Not yet checked: the photo files themselves (`images.squarespace-cdn.com` was still blocked in the dev sandbox). Their sizes come from Squarespace's `data-image-dimensions` markup.
 
 ## Run it
 
@@ -15,9 +23,10 @@ npm start                 # http://localhost:8080
 npm test                  # unit tests + an end-to-end render against a local stand-in site
 npm run demo -- 45 final  # renders a 45 s sample from generated test patterns, prints the file path
 npm run probe -- https://www.acedoutpodcast.com/episodes/32/linda-shider
+npm run sweep             # look up every episode in the feed, one line each
 ```
 
-`probe` is the first thing to run on a machine with normal internet access. For each episode URL it reports which lookup sources work (Squarespace JSON, page HTML, RSS), the real pixel size of every photo, the audio file's type, size, duration and range support, browser CORS headers, and whether there is a transcript or only show notes. It also writes `probe-report.json`.
+`probe` checks individual episodes in depth. For each episode URL it reports which lookup sources work (Squarespace JSON, page HTML, RSS), the real pixel size of every photo, the audio file's type, size, duration and range support, browser CORS headers, and whether there is a transcript or only show notes. It also writes `probe-report.json`.
 
 Or with Docker:
 
