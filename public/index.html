@@ -39,6 +39,7 @@
       <summary><h2><span class="n">2</span> Excerpt</h2><span class="sum" id="sum-excerpt"></span></summary>
       <div class="body">
         <label class="wide">Episode audio <input id="audio-url" type="url" placeholder="Found automatically, or paste the MP3 address"></label>
+        <p class="lbl listen">The whole episode: listen and jump around here to find your start and end</p>
         <audio id="audio" controls preload="metadata"></audio>
         <!-- The whole episode, left to right. Gold = the excerpt; white line = where playback is. -->
         <div id="range" class="range off">
@@ -76,7 +77,7 @@
       <summary><h2><span class="n">3</span> Photos</h2><span class="sum" id="sum-photos"></span></summary>
       <div class="body">
         <div class="photos-head">
-          <p class="hint">Tap photos to add them to your story. Tap again to take one out. You can drop your own photos here too.</p>
+          <p class="hint">Tap a photo to add it to the end of your story. Tap it again to use it again. Take photos out on the story strip below. You can drop your own photos here too.</p>
           <button type="button" id="import-photos" class="primary">Add photos…</button>
           <input id="import-files" type="file" accept="image/jpeg,image/png,image/webp,image/heic,image/heif,.jpg,.jpeg,.png,.webp,.heic,.heif" multiple hidden>
         </div>
@@ -92,7 +93,7 @@
     <details class="step" id="step-story" open>
       <summary><h2><span class="n">4</span> Arrange your story</h2><span class="sum" id="sum-story"></span></summary>
       <div class="body">
-        <p class="hint">Drag photos to change the order. The excerpt is shared out evenly, so wider tiles stay on screen longer. Click a tile to jump there in the preview.</p>
+        <p class="hint">Drag photos to change the order. The excerpt is shared out evenly, so wider tiles stay on screen longer. Click a tile to show that moment in the preview; ✕ takes a photo out.</p>
         <div class="strip-wrap" id="strip-wrap">
           <ol id="strip" class="strip" aria-label="Story, in playback order. Arrow keys choose a photo; Option or Alt with an arrow key moves it."></ol>
           <div id="strip-playhead" class="playhead" hidden></div>
@@ -118,7 +119,7 @@
     </details>
   </section>
 
-  <aside class="preview-col">
+  <aside class="preview-col" id="preview-col">
     <div class="phone">
       <div id="stage" class="stage">
         <div id="layers"></div>
@@ -127,10 +128,15 @@
         <div id="ov-caption" class="ov-caption" hidden></div>
         <div class="ov-lower"><div id="ov-guest"></div><div id="ov-sub"></div></div>
       </div>
+      <video id="result-video" class="result-video" controls playsinline preload="metadata" hidden></video>
     </div>
-    <div class="transport">
-      <button id="play" type="button" class="primary">▶ Play excerpt</button>
+    <div class="transport" id="transport">
+      <button id="play" type="button" class="primary" title="Plays the excerpt only, from its start (or from the photo you clicked) to its end">▶ Play excerpt</button>
       <output id="clock">0:00.0</output>
+    </div>
+    <div id="result-bar" class="result-bar" hidden>
+      <span>The finished video</span>
+      <button type="button" id="show-preview" class="quiet">Back to the live preview</button>
     </div>
     <div class="render">
       <p id="render-blocked" class="blocked" role="alert" hidden></p>
@@ -138,15 +144,11 @@
         <label><input type="radio" name="quality" value="draft" checked> Quick draft (540×960)</label>
         <label><input type="radio" name="quality" value="final"> Final 1080×1920</label>
       </fieldset>
+      <a id="download" class="primary button big" href="#" hidden>⬇ Download MP4</a>
       <button id="render" type="button" class="primary big">Make the video</button>
-      <div id="job" hidden>
-        <progress id="job-progress" max="1" value="0"></progress>
-        <p id="job-status" class="status" role="status"></p>
-      </div>
-      <div id="result" hidden>
-        <video id="result-video" controls playsinline></video>
-        <a id="download" class="primary button" href="#">Download MP4</a>
-      </div>
+      <progress id="job-progress" max="1" value="0" hidden></progress>
+      <p id="job-status" class="status" role="status"></p>
+      <p id="earlier" class="status" hidden>You've changed things since the last video. <a id="download-earlier" href="#">Download that one anyway</a> or <button type="button" id="watch-earlier" class="linkish">watch it</button>.</p>
     </div>
   </aside>
 </main>

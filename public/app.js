@@ -7,13 +7,15 @@ const state = {
   episode: null,     // {url, title} of the last successful lookup
   library: [],       // every photo we know about: {url, thumb, width, height, local?, name?}
                      // local = imported from Ace's computer, url = /uploads/<hash>.<ext>
-  story: [],         // chosen photos, in playback order: {url}
-  selected: null,    // url of the photo picked on the story strip
+  story: [],         // photos in playback order: {id, url}. The same url can appear
+                     // any number of times; each appearance has its own id.
+  selected: null,    // id of the story photo picked on the strip
   captions: null,    // {name, text} of an optional captions file
   cues: [],
   plan: { shots: [], warnings: [] },
 };
 const audio = $('#audio');
+const newId = () => (crypto.randomUUID ? crypto.randomUUID() : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`);
 const SECTIONS = ['step-episode', 'step-excerpt', 'step-photos', 'step-story'];
 window.pocketace = state; // inspectable from the browser console when helping remotely
 
@@ -156,8 +158,8 @@ async function checkImported() {
 
 function removeImported(url) {
   const p = state.library.find((l) => l.url === url);
-  const inStory = state.story.some((s) => s.url === url);
-  if (inStory && !confirm(`Remove ${p?.name || 'this photo'}? It's in your story and will come out of it too.`)) return;
+  const uses = state.story.filter((s) => s.url === url).length;
+  if (uses && !confirm(`Remove ${p?.name || 'this photo'}? It's in your story${uses > 1 ? ` ${uses} times` : ''} and will come out of it too.`)) return;
   state.library = state.library.filter((l) => l.url !== url);
   state.story = state.story.filter((s) => s.url !== url);
   missing.delete(url);
@@ -238,6 +240,7 @@ for (const which of ['start', 'end']) {
 $('#range').addEventListener('pointerdown', (e) => {
   if (!epLength() || e.button !== 0) return;
   const bar = $('#range');
+  leaveExcerpt();
   const seek = (ev) => {
     const r = bar.getBoundingClientRect();
     audio.currentTime = Math.min(Math.max((ev.clientX - r.left) / r.width, 0), 1) * epLength();
@@ -288,7 +291,8 @@ function refresh() {
   const { start, end } = range();
   const len = end - start;
   $('#length').textContent = len > 0 ? fmt(len) : '—';
-  if (state.selected && !state.story.some((p) => p.url === state.selected)) state.selected = null;
+  if (state.selected && !state.story.some((p) => p.id === state.selected)) state.selected = null;
+  boundsChanged(start, end);
   try {
     state.plan = state.story.length && len > 0
       ? schedule({ duration: len, photos: state.story.map((p, i) => ({ id: i })) })
@@ -303,6 +307,7 @@ function refresh() {
   buildLayers();
   drawFrame();
   renderSummaries();
+  renderButtons();
   save();
 }
 
@@ -315,22 +320,19 @@ function renderGallery() {
   g.replaceChildren(...state.library.map((p) => {
     const item = el('div', { className: `gitem${p.local ? ' local' : ''}${missing.has(p.url) ? ' missing' : ''}` });
     const b = el('button', { type: 'button', className: 'thumb' });
-    const idx = state.story.findIndex((s) => s.url === p.url);
-    b.classList.toggle('on', idx >= 0);
-    b.setAttribute('aria-pressed', idx >= 0);
-    b.setAttribute('aria-label', idx >= 0 ? `Photo ${idx + 1} in the story. Tap to take it out.` : 'Add to the story');
+    const uses = state.story.filter((s) => s.url === p.url).length;
+    b.classList.toggle('on', uses > 0);
+    if (p.url === justAdded) b.classList.add('added');
+    b.setAttribute('aria-label', `Add to the end of the story${uses ? ` (in it ${uses === 1 ? 'once' : `${uses} times`} already)` : ''}`);
     const img = el('img', { src: p.thumb || thumb(p.url), alt: '', loading: 'lazy' });
     if (p.local) img.addEventListener('error', () => { item.classList.add('missing'); b.title = `${p.name || 'This photo'} is no longer on this computer. Remove it and add it again.`; }, { once: true });
     b.append(img);
-    if (idx >= 0) b.append(el('span', { className: 'badge', textContent: idx + 1 }));
+    if (uses) b.append(el('span', { className: 'badge', textContent: `×${uses}`, title: `In the story ${uses === 1 ? 'once' : `${uses} times`}` }));
     if (p.width) {
       const low = Math.max(p.width, p.height) < 800;
       b.append(el('span', { className: `res${low ? ' low' : ''}`, textContent: `${p.width}×${p.height}`, title: low ? 'Small photo: it will appear smaller on screen' : '' }));
     }
-    b.addEventListener('click', () => {
-      if (idx >= 0) state.story.splice(idx, 1); else state.story.push({ url: p.url });
-      refresh();
-    });
+    b.addEventListener('click', () => addToStory(p.url));
     item.append(b);
     if (p.local) {
       if (p.name) b.title ||= p.name;
@@ -344,6 +346,19 @@ function renderGallery() {
   }));
 }
 
+// Each tap adds the photo once more, at the end. The tile pulses so the tap
+// visibly did something even when the strip is out of view.
+let justAdded = null;
+function addToStory(url) {
+  state.story.push({ id: newId(), url });
+  justAdded = url;
+  refresh();
+  justAdded = null;
+  $('#strip-live').textContent = `Added as photo ${state.story.length} of ${state.story.length}.`;
+  const wrap = $('#strip-wrap');
+  wrap.scrollLeft = wrap.scrollWidth;
+}
+
 // The story strip: one tile per photo, in playback order, each as wide as its
 // share of the excerpt. Tile widths come straight from the scheduled shots, so
 // the day shot lengths become adjustable, dragging the edge between two tiles
@@ -352,7 +367,7 @@ let stripKey = '';
 function renderStrip() {
   const strip = $('#strip');
   const shots = state.plan.shots;
-  const key = state.story.map((p) => p.url).join('\n');
+  const key = state.story.map((p) => p.id).join('\n');
   if (key !== stripKey) {
     stripKey = key;
     strip.replaceChildren(...state.story.map((p, i) => {
@@ -361,12 +376,16 @@ function renderStrip() {
       b.dataset.index = i;
       b.style.backgroundImage = `url("${thumb(p.url)}")`;
       b.append(el('span', { className: 'num', textContent: i + 1 }), el('span', { className: 'dur' }));
-      li.append(b);
+      const x = el('button', { type: 'button', className: 'x', textContent: '✕', title: 'Take this photo out of the story' });
+      x.setAttribute('aria-label', `Take photo ${i + 1} out of the story`);
+      x.tabIndex = -1; // keyboard users have Delete on the tile
+      x.addEventListener('click', () => removeFromStory(i));
+      li.append(b, x);
       return li;
     }));
   }
   const tiles = [...strip.querySelectorAll('.tile')];
-  const sel = state.story.findIndex((p) => p.url === state.selected);
+  const sel = selectedIndex();
   tiles.forEach((b, i) => {
     const s = shots[i];
     const d = s ? s.end - s.start : 1;
@@ -394,19 +413,19 @@ function moveStory(from, to, announce = true) {
   if (to < 0 || to >= state.story.length || from === to) return;
   const [p] = state.story.splice(from, 1);
   state.story.splice(to, 0, p);
-  state.selected = p.url;
+  state.selected = p.id;
   refresh();
   if (announce) $('#strip-live').textContent = `Moved to position ${to + 1} of ${state.story.length}.`;
 }
 function removeFromStory(i) {
   const [p] = state.story.splice(i, 1);
   const next = state.story[Math.min(i, state.story.length - 1)];
-  state.selected = next?.url ?? null;
+  state.selected = next?.id ?? null;
   refresh();
-  $('#strip-live').textContent = `Removed photo ${i + 1}. ${state.story.length} left.`;
+  $('#strip-live').textContent = `Took photo ${i + 1} out. ${state.story.length} left.`;
   return p;
 }
-const selectedIndex = () => state.story.findIndex((p) => p.url === state.selected);
+const selectedIndex = () => state.story.findIndex((p) => p.id === state.selected);
 const focusTile = (i) => $(`#strip .tile[data-index="${i}"]`)?.focus();
 
 $('#move-earlier').addEventListener('click', () => moveStory(selectedIndex(), selectedIndex() - 1));
@@ -431,16 +450,14 @@ strip.addEventListener('keydown', (e) => {
   if (handled) e.preventDefault();
 });
 
-// Pick a tile and move the preview to a point inside it (0..1 across the tile).
+// Pick a tile and move the excerpt preview to a point inside it (0..1 across
+// the tile). Play excerpt then carries on from there.
 function selectTile(i, frac) {
   const s = state.plan.shots[i];
-  state.selected = state.story[i]?.url ?? null;
-  if (s) {
-    audio.currentTime = range().start + s.start + Math.min(Math.max(frac, 0), 0.999) * (s.end - s.start);
-  }
+  state.selected = state.story[i]?.id ?? null;
+  if (s) setPreviewTime(s.start + Math.min(Math.max(frac, 0), 0.999) * (s.end - s.start));
   renderStrip();
   drawFrame();
-  drawPlayback();
   save();
 }
 
@@ -495,7 +512,7 @@ const endDrag = (e, cancelled) => {
   document.body.classList.remove('dragging');
   $('#strip-marker').hidden = true;
   if (!cancelled && d.to !== null && d.to !== d.from) moveStory(d.from, d.to);
-  else { state.selected = state.story[d.from].url; renderStrip(); }
+  else { state.selected = state.story[d.from].id; renderStrip(); }
   focusTile(selectedIndex());
 };
 strip.addEventListener('pointerup', (e) => endDrag(e, false));
@@ -510,8 +527,7 @@ strip.addEventListener('click', (e) => {
 
 function drawStripPlayhead() {
   const ph = $('#strip-playhead');
-  const { start, end } = range();
-  const t = Math.min(Math.max(audio.currentTime - start, 0), Math.max(end - start - 1e-3, 0)); // as drawFrame
+  const t = Math.min(previewTime(), Math.max(excerptLength() - 1e-3, 0));
   const shots = state.plan.shots;
   const i = shots.findIndex((s) => t >= s.start && t < s.end);
   const cell = $(`#strip .tile[data-index="${i}"]`)?.parentElement;
@@ -541,7 +557,7 @@ function setCaptions(c) {
 let layers = [];
 let layersKey = '';
 function buildLayers() {
-  const key = state.story.map((p) => p.url).join('\n');
+  const key = state.story.map((p) => p.id).join('\n');
   if (key === layersKey && layers.length === state.plan.shots.length) {
     layers.forEach((layer, i) => { layer.shot = state.plan.shots[i]; });
     return;
@@ -573,7 +589,7 @@ function place(layer) {
 
 function drawFrame() {
   const { start, end } = range();
-  const t = Math.min(Math.max(audio.currentTime - start, 0), Math.max(end - start, 0));
+  const t = previewTime();
   $('#clock').textContent = `${fmt(t)} / ${fmt(end - start)}`;
   const shots = state.plan.shots;
   const T = shots.length ? transitionFor(shots) : 0;
@@ -593,7 +609,7 @@ function drawFrame() {
     const oy = (1 - 1 / z) * (m.y0 + (m.y1 - m.y0) * f) * 100;
     layer.querySelector('.fg img').style.transform = `scale(${z}) translate(${-ox}%, ${-oy}%)`;
   });
-  const cue = state.cues.find((c) => audio.currentTime >= c.start && audio.currentTime < c.end);
+  const cue = state.cues.find((c) => start + t >= c.start && start + t < c.end);
   const cap = $('#ov-caption');
   cap.hidden = !cue || t <= 0 || t >= end - start;
   if (cue) cap.replaceChildren(el('span', { textContent: cue.text }));
@@ -602,28 +618,93 @@ function drawFrame() {
   drawStripPlayhead();
 }
 
-// "Play excerpt" plays only the selection and stops at its end. The episode
-// player above stays free: playing from there is just listening.
+// Two ways to listen, one audio element:
+//  - The episode player in Excerpt is for exploring the whole recording. It
+//    plays and seeks freely and never moves the excerpt preview.
+//  - "Play excerpt" previews the selection: it starts at Start (or at the
+//    photo last clicked on the strip), stops at End, and the preview, strip
+//    playhead and clock follow it.
+// The preview keeps its own position, `previewAt` (seconds into the excerpt).
+// It goes back to 0 whenever Start or End changes and when playback reaches End.
+let previewAt = 0;
 let excerptPlay = false;
+let ownSeek = false;
+let lastBounds = '';
+const excerptLength = () => { const { start, end } = range(); return end > start ? end - start : 0; };
+function previewTime() { return Math.min(Math.max(previewAt, 0), excerptLength()); }
+function setPreviewTime(t) {
+  previewAt = Math.min(Math.max(t, 0), excerptLength());
+  if (excerptPlay) seekAudio(range().start + previewAt);
+}
+function seekAudio(t) { ownSeek = true; audio.currentTime = t; }
+function boundsChanged(start, end) {
+  const b = `${start}|${end}`;
+  if (b === lastBounds) return;
+  const startMoved = lastBounds && lastBounds.split('|')[0] !== String(start);
+  lastBounds = b;
+  previewAt = 0;
+  // Playing the excerpt while Start moves: carry on from the new Start.
+  if (excerptPlay && startMoved && Number.isFinite(start)) seekAudio(start);
+}
+function leaveExcerpt() {
+  if (!excerptPlay) return;
+  excerptPlay = false; // previewAt keeps the last moment the excerpt really played
+  setPlayButton();
+}
+// While the excerpt plays, previewAt follows the audio only as it plays on
+// (small steps forward). A jump nobody here asked for is someone exploring
+// the episode: let the excerpt go and leave the preview where it was. By the
+// time the browser reports a seek, the audio is already at the new place, so
+// this check is what tells the two apart. Runs every frame and on timeupdate
+// (which keeps going when frames are throttled, e.g. in a background tab).
+function follow() {
+  if (!excerptPlay || audio.paused) return;
+  const t = audio.currentTime - range().start;
+  if (t < previewAt - 0.25 || t > previewAt + 3) { if (!ownSeek) leaveExcerpt(); return; }
+  if (t >= excerptLength()) { previewAt = excerptLength(); finishing = true; audio.pause(); return; }
+  previewAt = Math.max(t, 0);
+}
+function setPlayButton() {
+  $('#play').textContent = excerptPlay && !audio.paused ? '❚❚ Pause excerpt' : '▶ Play excerpt';
+}
+
 $('#play').addEventListener('click', () => {
-  const { start, end } = range();
-  if (!audio.paused) { audio.pause(); return; }
-  if (!(end > start)) return;
-  if (audio.currentTime < start || audio.currentTime >= end) audio.currentTime = start;
+  if (excerptPlay && !audio.paused) { audio.pause(); return; }
+  const { start } = range();
+  const len = excerptLength();
+  if (!len) return;
+  if (previewAt >= len - 0.05) previewAt = 0;
+  seekAudio(start + previewAt);
   excerptPlay = true;
-  audio.play().catch((err) => { excerptPlay = false; setStatus('#lookup-status', `Audio would not play: ${err.message}`, true); });
+  setPlayButton();
+  // Already playing (from the episode player)? The running frame loop just
+  // carries on, now as the excerpt.
+  if (audio.paused) audio.play().catch((err) => { excerptPlay = false; setPlayButton(); setStatus('#lookup-status', `Audio would not play: ${err.message}`, true); });
 });
-audio.addEventListener('play', () => { $('#play').textContent = '❚❚ Pause'; tick(); });
-audio.addEventListener('pause', () => { $('#play').textContent = '▶ Play excerpt'; excerptPlay = false; });
-audio.addEventListener('seeked', () => { drawFrame(); drawPlayback(); });
+let finishing = false;
+audio.addEventListener('play', () => { setPlayButton(); tick(); });
+audio.addEventListener('pause', () => {
+  if (excerptPlay) {
+    if (finishing) previewAt = 0;
+    excerptPlay = false;
+  }
+  finishing = false;
+  setPlayButton();
+  drawFrame();
+});
+// A seek we didn't make came from the episode player: that's exploring the
+// episode, so the excerpt preview lets go and stays where it was.
+audio.addEventListener('seeking', () => { if (!ownSeek) leaveExcerpt(); });
+audio.addEventListener('seeked', () => { ownSeek = false; drawFrame(); drawPlayback(); });
+audio.addEventListener('timeupdate', follow);
 function tick() {
-  if (excerptPlay && audio.currentTime >= range().end) { audio.pause(); audio.currentTime = range().end; }
+  follow();
   drawFrame();
   drawPlayback();
   if (!audio.paused) requestAnimationFrame(tick);
 }
-['#guest', '#subtitle'].forEach((s) => $(s).addEventListener('input', () => { drawFrame(); renderSummaries(); save(); }));
-document.querySelectorAll('input[name=quality]').forEach((r) => r.addEventListener('change', save));
+['#guest', '#subtitle'].forEach((s) => $(s).addEventListener('input', () => { drawFrame(); renderSummaries(); renderButtons(); save(); }));
+document.querySelectorAll('input[name=quality]').forEach((r) => r.addEventListener('change', () => { renderButtons(); save(); }));
 
 // ---------- Section summaries (shown beside each heading) ----------
 function renderSummaries() {
@@ -631,7 +712,8 @@ function renderSummaries() {
   const len = end - start;
   $('#sum-episode').textContent = state.episode ? episodeLabel(state.episode.title) : 'No episode yet';
   $('#sum-excerpt').textContent = len > 0 ? `${fmtShort(start)}–${fmtShort(end)} · ${fmtShort(len)} selected` : 'Set a start and an end';
-  $('#sum-photos').textContent = state.library.length ? `${state.story.length} selected · ${state.library.length} available` : 'No photos yet';
+  const used = new Set(state.story.map((p) => p.url)).size;
+  $('#sum-photos').textContent = state.library.length ? `${state.library.length} available · ${used} in the story` : 'No photos yet';
   $('#sum-story').textContent = state.story.length ? `${state.story.length} photo${state.story.length === 1 ? '' : 's'}${len > 0 ? ` · ${fmtShort(len)} total` : ''}` : 'Nothing to arrange yet';
 }
 // "Episode 29: Rustee Allen & Levi Seacer Jr. [P-FUNK]" → "Episode 29 · Rustee Allen & Levi Seacer Jr."
@@ -664,7 +746,7 @@ function writeSave() {
     start: $('#start').value,
     end: $('#end').value,
     library: state.library,
-    story: state.story.map((p) => ({ url: p.url })),
+    story: state.story.map((p) => ({ id: p.id, url: p.url })),
     selected: state.selected,
     guest: $('#guest').value,
     subtitle: $('#subtitle').value,
@@ -672,6 +754,7 @@ function writeSave() {
     captions: state.captions && state.captions.text.length < 1e6 ? state.captions : null,
     open: Object.fromEntries(SECTIONS.map((id) => [id, $(`#${id}`).open])),
     playhead: audio.currentTime || 0,
+    lastRender: job.last,
   };
   try {
     localStorage.setItem(SAVE_KEY, JSON.stringify(project));
@@ -690,7 +773,13 @@ function restore() {
   $('#episode-url').value = p.episodeUrl || '';
   state.episode = p.episode || null;
   state.library = Array.isArray(p.library) ? p.library : [];
-  state.story = Array.isArray(p.story) ? p.story.filter((s) => s && s.url).map((s) => ({ url: s.url })) : [];
+  // Saves from before repeats existed have no ids; give each appearance one.
+  const seen = new Set();
+  state.story = Array.isArray(p.story) ? p.story.filter((s) => s && s.url).map((s) => {
+    const id = s.id && !seen.has(s.id) ? s.id : newId();
+    seen.add(id);
+    return { id, url: s.url };
+  }) : [];
   state.selected = p.selected || null;
   $('#start').value = p.start ?? '0:00.0';
   $('#end').value = p.end ?? '1:00.0';
@@ -700,6 +789,7 @@ function restore() {
   if (q) q.checked = true;
   if (p.captions?.text) setCaptions(p.captions);
   for (const id of SECTIONS) if (p.open && id in p.open) $(`#${id}`).open = !!p.open[id];
+  if (p.lastRender?.id) recheckLastRender(p.lastRender);
   if (p.audioUrl) {
     setAudio(p.audioUrl);
     if (p.playhead) audio.addEventListener('loadedmetadata', () => { audio.currentTime = p.playhead; }, { once: true });
@@ -727,51 +817,141 @@ async function checkRenderer() {
   } catch { renderBlocked = null; }
   $('#render-blocked').hidden = !renderBlocked;
   $('#render-blocked').textContent = renderBlocked ? `Videos can't be made on this computer yet. ${renderBlocked}` : '';
-  $('#render').disabled = !!renderBlocked;
+  renderButtons();
 }
 
-$('#render').addEventListener('click', async () => {
+// The button under the preview does one obvious thing at a time:
+//   nothing made yet, or the story changed since → Make the video
+//   making it                                     → progress, in the button
+//   made, and it matches what's on screen         → Download MP4 (Make it again next to it)
+// When it finishes, the video plays right in the phone frame.
+const job = { running: false, progress: 0, last: null, readyText: '' }; // last: {id, sig, seconds, quality}
+function renderBody() {
   const { start, end } = range();
-  const body = {
+  return {
     audioUrl: $('#audio-url').value.trim(), start, end,
-    photos: state.story.map((p) => ({ url: p.url })), // strip order is play order
+    photos: state.story.map((p) => ({ url: p.url })), // strip order is play order; repeats included
     guest: $('#guest').value, subtitle: $('#subtitle').value,
     captions: state.cues.length ? state.captions.text : null,
     quality: document.querySelector('input[name=quality]:checked').value,
   };
-  $('#render').disabled = true;
-  $('#job').hidden = false;
-  $('#result').hidden = true;
+}
+function renderSig() {
+  const str = JSON.stringify(renderBody());
+  let h = 2166136261; // FNV-1a, enough to notice a change
+  for (let i = 0; i < str.length; i++) h = Math.imul(h ^ str.charCodeAt(i), 16777619);
+  return (h >>> 0).toString(36) + str.length.toString(36);
+}
+function renderButtons() {
+  const current = !!job.last && !job.running && job.last.sig === renderSig();
+  const r = $('#render');
+  $('#download').hidden = !current;
+  if (job.last) {
+    $('#download').href = `/api/jobs/${job.last.id}/video?download=1`;
+    $('#download-earlier').href = `/api/jobs/${job.last.id}/video?download=1`;
+  }
+  r.classList.toggle('primary', !current);
+  r.classList.toggle('again', current);
+  r.textContent = job.running ? `Making the video… ${Math.round(job.progress * 100)}%` : current ? 'Make it again' : 'Make the video';
+  r.disabled = job.running || !!renderBlocked;
+  $('#job-progress').hidden = !job.running;
+  $('#job-progress').value = job.progress;
+  $('#earlier').hidden = !job.last || current || job.running;
+  // "Ready…" only while it's true; an error message is left alone.
+  const status = $('#job-status').textContent;
+  if (!current && !job.running && status && status === job.readyText) setStatus('#job-status', '');
+  if (current && !status && job.readyText) setStatus('#job-status', job.readyText);
+  if (!current && showingResult) showPreview(); // edits: back to the live preview
+  fitPreview();
+}
+
+let showingResult = false;
+function showResult() {
+  if (!job.last) return;
+  audio.pause();
+  const v = $('#result-video');
+  const src = `/api/jobs/${job.last.id}/video`;
+  if (!v.src.endsWith(src)) v.src = src;
+  showingResult = true;
+  $('#stage').hidden = true; v.hidden = false;
+  $('#transport').hidden = true; $('#result-bar').hidden = false;
+  fitPreview();
+}
+function showPreview() {
+  const v = $('#result-video');
+  v.pause();
+  showingResult = false;
+  v.hidden = true; $('#stage').hidden = false;
+  $('#result-bar').hidden = true; $('#transport').hidden = false;
+  fitPreview();
+}
+$('#show-preview').addEventListener('click', showPreview);
+$('#watch-earlier').addEventListener('click', showResult);
+
+$('#render').addEventListener('click', async () => {
+  const body = renderBody();
+  const sig = renderSig();
+  job.running = true;
+  job.progress = 0;
+  renderButtons();
   setStatus('#job-status', 'Sending…');
   try {
     const r = await fetch('/api/render', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
     const data = await r.json();
     if (!r.ok) throw new Error(data.error);
-    await poll(data.id);
+    const j = await poll(data.id);
+    job.last = { id: data.id, sig, seconds: Math.round(j.renderSeconds), quality: body.quality };
+    job.running = false;
+    job.readyText = `Ready: ${fmtShort(body.end - body.start)} at ${body.quality === 'final' ? '1080×1920' : '540×960'}, made in ${job.last.seconds}s.`;
+    setStatus('#job-status', job.readyText);
+    renderButtons();
+    showResult();
+    save();
+    // On a narrow screen the column isn't pinned: bring the download into view.
+    $('#download').scrollIntoView({ block: 'nearest', behavior: 'smooth' });
   } catch (err) {
+    job.running = false;
+    renderButtons();
     setStatus('#job-status', err.message, true);
-  } finally {
-    $('#render').disabled = !!renderBlocked;
   }
 });
 
 async function poll(id) {
   for (;;) {
     const j = await (await fetch(`/api/jobs/${id}`)).json();
-    $('#job-progress').value = j.progress || 0;
-    const words = { queued: `Waiting for another video to finish (${j.queuePosition} ahead)`, downloading: 'Fetching audio and photos…', rendering: `Making the video… ${Math.round((j.progress || 0) * 100)}%` };
     if (j.status === 'failed') throw new Error(`The render failed: ${j.error}`);
-    if (j.status === 'done') {
-      setStatus('#job-status', `Done in ${Math.round(j.renderSeconds)}s.`);
-      $('#result-video').src = `/api/jobs/${id}/video`;
-      $('#download').href = `/api/jobs/${id}/video?download=1`;
-      $('#result').hidden = false;
-      return;
-    }
+    if (j.status === 'done') return j;
+    job.progress = j.progress || 0;
+    renderButtons();
+    const words = { queued: `Waiting for another video to finish (${j.queuePosition} ahead)`, downloading: 'Fetching audio and photos…', rendering: 'Rendering…' };
     setStatus('#job-status', words[j.status] || j.status);
     await new Promise((r) => setTimeout(r, 1000));
   }
 }
+
+// After a reload, the last video is still offered if the server still has it
+// (renders are kept for JOB_TTL_HOURS, and not across a server restart).
+async function recheckLastRender(last) {
+  try {
+    const j = await (await fetch(`/api/jobs/${last.id}`)).json();
+    if (j.status !== 'done') return;
+    job.last = last;
+    job.readyText = `Your last video (${last.quality === 'final' ? '1080×1920' : '540×960'}) is still here.`;
+    setStatus('#job-status', job.readyText);
+    renderButtons();
+  } catch { /* gone: nothing to offer */ }
+}
+
+// One page scroll. The preview column is pinned while the builder scrolls; if
+// it is ever taller than the window it pins by its bottom edge instead, so the
+// buttons under the phone can always be reached.
+const previewCol = $('#preview-col');
+function fitPreview() {
+  const pinned = getComputedStyle(previewCol).position === 'sticky';
+  previewCol.style.top = pinned ? `${Math.min(12, innerHeight - previewCol.offsetHeight - 12)}px` : '';
+}
+addEventListener('resize', fitPreview);
+new ResizeObserver(fitPreview).observe(previewCol);
 
 // ---------- helpers ----------
 function el(tag, props = {}) { return Object.assign(document.createElement(tag), props); }

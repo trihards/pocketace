@@ -2,7 +2,7 @@
 
 Proof of concept for Ace Alan's [Aced Out Podcast](https://www.acedoutpodcast.com/episodes): turn a 5–10 minute excerpt of an episode into an illustrated vertical (1080×1920) MP4 for YouTube.
 
-Paste an episode page address, drag the excerpt handles over the episode, tap the photos you want, drag them into order on the story strip, preview, and render. PocketAce shares the excerpt out evenly between the photos. Work is saved in the browser as you go. All photo timing, framing, motion and transitions follow fixed rules. There is no AI or speech recognition anywhere in the app.
+Paste an episode page address, drag the excerpt handles over the episode, tap photos in the gallery to add them to the story (a photo can be used more than once), drag them into order on the story strip, preview, and render. PocketAce shares the excerpt out evenly between the photos. Work is saved in the browser as you go. All photo timing, framing, motion and transitions follow fixed rules. There is no AI or speech recognition anywhere in the app.
 
 **Status:** prototype. Verified against the live site on 22 Oct 2026 (`npm run sweep`):
 
@@ -82,6 +82,12 @@ Files worth knowing:
 - `lib/ffmpeg.js`: finds a complete FFmpeg and explains what's missing when there isn't one. Also behind `npm run doctor`.
 - `public/app.js`: the editor: excerpt range bar, story strip (drag, keyboard: arrows choose, Option/Alt+arrows move, Delete removes), preview, autosave.
 
+## Using it
+
+- **Two kinds of listening.** The episode player in Excerpt is for exploring the whole recording: it plays and jumps freely, and **Use current time** takes its position. **▶ Play excerpt** under the preview plays only the selection: from Start (or from the photo last clicked on the strip) to End, and the preview, strip playhead and clock follow it. Moving Start or End sends the excerpt back to its start. Jumping around in the episode player while the excerpt plays lets go of the excerpt and leaves the preview where it was.
+- **The gallery is a supply.** Every tap adds that photo once more to the end of the story; the badge (×2, ×3…) counts how often it's used. Each copy is its own tile: drag it, or take it out with its **✕** on the strip (or select it and press Remove or Delete).
+- **One page scroll.** On a desktop the preview stays pinned beside the builder. When a video is ready it plays in the phone frame and the main button becomes **Download MP4**, with **Make it again** next to it. Change anything and **Make the video** comes back, with a link to the earlier file. After a reload the last video is offered again while the server still has it.
+
 ## Photos from your computer
 
 **Add photos…** in the Photos section opens the file picker, or drop photos anywhere on that section (several at once is fine). JPEG, PNG and WebP are taken as they are. HEIC, the iPhone's format, works from Safari, which can open it: PocketAce turns it into a full-size JPEG before sending it. Other browsers can't open HEIC, so they explain that and how to export a JPEG from Photos instead.
@@ -98,7 +104,7 @@ Limits:
 
 ## Saved work
 
-The project autosaves a third of a second after every change, in the browser's `localStorage` under the key `pocketace.project.v1`: episode address and title, the gallery (the photos the lookup found, and the addresses of photos you imported), audio address, start and end, the story in order, guest name and line underneath, draft/final choice, which sections are open, and a captions file's text if one is loaded. Reloading or reopening the page puts all of it back. **Start over** (top right) clears it. The header shows when it last saved.
+The project autosaves a third of a second after every change, in the browser's `localStorage` under the key `pocketace.project.v1`: episode address and title, the gallery (the photos the lookup found, and the addresses of photos you imported), audio address, start and end, the story in order (each copy of a repeated photo separately), the last finished video, guest name and line underneath, draft/final choice, which sections are open, and a captions file's text if one is loaded. Reloading or reopening the page puts all of it back. **Start over** (top right) clears it. The header shows when it last saved.
 
 Limits, all from living in one browser:
 

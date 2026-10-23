@@ -124,18 +124,39 @@ try {
   check(near(markX, bar.x + (790 / D) * bar.w, 1.5), 'playback marker shows the audio position, separate from the handles');
   await page.fill('#start', '13:01');
 
-  // ---- Play excerpt stops at the end ----
+  // ---- Excerpt playback follows the selection, not the episode player ----
+  const audioState = () => page.$eval('#audio', (a) => ({ t: a.currentTime, paused: a.paused }));
+  const playAndTrack = async () => {
+    await page.click('#play');
+    await page.waitForFunction(() => !document.querySelector('#audio').paused, null, { timeout: 20000 });
+    const first = (await audioState()).t;
+    await page.waitForFunction(() => document.querySelector('#audio').paused, null, { timeout: 20000 });
+    return { first, stop: (await audioState()).t };
+  };
   await page.fill('#start', '13:01'); await page.fill('#end', '13:04');
-  await page.$eval('#audio', (a) => { a.muted = true; });
+  // The episode player was left inside the excerpt, at 13:02.5.
+  await page.$eval('#audio', (a) => { a.muted = true; a.currentTime = 782.5; });
+  await page.waitForTimeout(300);
+  let run = await playAndTrack();
+  check(near(run.first, 781, 0.35), 'Play excerpt starts at Start, wherever the episode player was', `episode at 13:02.5, excerpt started at ${run.first.toFixed(2)}s`);
+  check(near(run.stop, 784, 0.3), 'Play excerpt stops at End', `stopped at ${run.stop.toFixed(2)}s`);
+  await page.click('[data-nudge="start"][data-by="1"]');
+  run = await playAndTrack();
+  check(near(run.first, 782, 0.35) && near(run.stop, 784, 0.3), 'after moving Start, it plays the new selection', `${run.first.toFixed(2)}–${run.stop.toFixed(2)}s`);
+  // Exploring the episode doesn't move the excerpt preview, and a seek there lets go of the excerpt.
+  await page.fill('#start', '13:01'); await page.fill('#end', '13:20');
   await page.click('#play');
-  await page.waitForFunction(() => document.querySelector('#audio').paused, null, { timeout: 20000 });
-  const stopAt = await page.$eval('#audio', (a) => a.currentTime);
-  check(near(stopAt, 784, 0.3), 'Play excerpt plays only the selection', `started 13:01, stopped at ${stopAt.toFixed(2)}s`);
+  await page.waitForTimeout(900);
+  await page.$eval('#audio', (a) => { a.currentTime = 1000; });
+  await page.waitForTimeout(500);
+  const left = await page.evaluate(() => ({ btn: document.querySelector('#play').textContent, clock: document.querySelector('#clock').textContent, t: document.querySelector('#audio').currentTime, paused: document.querySelector('#audio').paused }));
+  check(left.btn.includes('Play excerpt') && !left.paused && left.t > 999 && /^0:0[0-2]/.test(left.clock), 'seeking in the episode player keeps playing the episode and leaves the preview where it was', `${left.btn}, episode at ${left.t.toFixed(1)}s, preview ${left.clock}`);
+  await page.$eval('#audio', (a) => a.pause());
   await page.fill('#start', '13:01'); await page.fill('#end', '18:05');
 
   // ---- Photos ----
   for (const i of [0, 3, 5, 7, 9, 11]) await page.locator('#gallery .thumb').nth(i).click();
-  check((await page.textContent('#sum-photos')).startsWith('6 selected ·'), 'photos summary', await page.textContent('#sum-photos'));
+  check(/ available · 6 in the story$/.test(await page.textContent('#sum-photos')), 'photos summary', await page.textContent('#sum-photos'));
   check((await page.textContent('#sum-story')) === '6 photos · 5:04 total', 'story summary', await page.textContent('#sum-story'));
 
   // ---- Photos from the computer ----
@@ -188,8 +209,6 @@ try {
   const stripOrder = await page.$$eval('#strip .tile', (ts) => ts.map((t) => t.style.backgroundImage));
   // Website tiles show the photo at a small size, imported ones their thumbnail: compare what both keep.
   check(stripOrder.every((bg, i) => bg.includes(order[i].split('?')[0].replace(/\.(jpg|png|webp|gif)$/, ''))), 'strip shows the new order');
-  const badges = await page.$$eval('#gallery .thumb', (ts) => ts.map((t) => t.querySelector('.badge')?.textContent ?? null));
-  check(badges[0] === '3', 'gallery badge follows the move', `first photo now badge ${badges[0]}`);
   const layerOrder = await page.evaluate(() => [...document.querySelectorAll('#layers .layer .fg img')].map((i) => i.getAttribute('src')));
   check(JSON.stringify(layerOrder) === JSON.stringify(order), 'preview plays in strip order');
   // Keyboard alternative: Option/Alt+Left moves the selected tile earlier.
@@ -202,25 +221,55 @@ try {
   order = await storyUrls();
   check(order[2] === original[0], '"Later" button moves it back');
   check(await page.$eval('#sel-info', (n) => n.textContent.startsWith('Photo 3 of 8')), 'toolbar names the selected photo', await page.textContent('#sel-info'));
-  // Click inside a tile moves the preview there.
+  // Click inside a tile moves the preview there, and Play excerpt carries on from that photo.
   const t4 = await tileBox(3);
   await page.mouse.click(t4.x + t4.width / 2, t4.y + t4.height / 2);
   const shot = await page.evaluate(() => window.pocketace.plan.shots[3]);
-  const now = await page.$eval('#audio', (a) => a.currentTime);
-  check(now - 781 > shot.start && now - 781 < shot.end, 'clicking a tile jumps the preview into that photo');
+  const clockAt = (await page.textContent('#clock')).split(' / ')[0].split(':').map(Number).reduce((x, n) => x * 60 + n, 0);
+  check(clockAt > shot.start && clockAt < shot.end, 'clicking a tile shows that moment in the preview', `${clockAt}s`);
+  await page.click('#play');
+  await page.waitForFunction(() => !document.querySelector('#audio').paused, null, { timeout: 20000 });
+  const fromTile = (await audioState()).t - 781;
+  await page.$eval('#audio', (a) => a.pause());
+  check(fromTile > shot.start && fromTile < shot.end, 'Play excerpt then starts from that photo', `${fromTile.toFixed(1)}s into the excerpt`);
   const typeOnTop = await page.evaluate(() => ['.ov-brand', '#ov-guest'].every((s) => {
     const r = document.querySelector(s).getBoundingClientRect();
     return document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2)?.closest(s);
   }));
   check(typeOnTop, 'wordmark and guest name stay above a later photo in the preview');
+
+  // ---- The gallery is a supply: each tap adds another copy ----
+  const firstUrl = (await storyUrls())[0];
+  const g0 = await page.evaluate((u) => window.pocketace.library.findIndex((p) => p.url === u), firstUrl);
+  await page.locator('#gallery .thumb').nth(g0).click();
+  await page.locator('#gallery .thumb').nth(g0).click();
+  let st = await page.evaluate(() => window.pocketace.story);
+  check(st.length === 10 && st[8].url === firstUrl && st[9].url === firstUrl && new Set(st.map((p) => p.id)).size === 10, 'tapping a photo again adds another copy at the end (never removes)', `${st.length} in the story`);
+  check((await page.locator('#gallery .thumb').nth(g0).locator('.badge').textContent()) === '×3', 'the gallery badge counts the copies');
+  // Move the last copy to position 5 with the keyboard; the other copies stay put.
+  await page.locator('#strip-wrap').scrollIntoViewIfNeeded();
+  await page.locator('#strip .tile').nth(9).focus();
+  for (let k = 0; k < 5; k++) await page.keyboard.press('Alt+ArrowLeft');
+  const movedId = st[9].id;
+  st = await page.evaluate(() => window.pocketace.story);
+  check(st[4].id === movedId && st[0].url === firstUrl && st[9].url === firstUrl, 'each copy is reordered on its own');
+  // Take the copy at the end out with its ✕ on the strip.
+  const lastCell = page.locator('#strip .cell').nth(9);
+  await lastCell.hover();
+  await lastCell.locator('.x').click();
+  st = await page.evaluate(() => window.pocketace.story);
+  check(st.length === 9 && st.filter((p) => p.url === firstUrl).length === 2 && st[4].id === movedId, '✕ on the strip takes out just that copy');
+  check((await page.locator('#gallery .thumb').nth(g0).locator('.badge').textContent()) === '×2', 'and the badge counts down');
+  const layerSrcs = await page.evaluate(() => [...document.querySelectorAll('#layers .layer .fg img')].map((i) => i.getAttribute('src')));
+  check(JSON.stringify(layerSrcs) === JSON.stringify(st.map((p) => p.url)), 'the preview plays every copy, in strip order');
   const finalOrder = await storyUrls();
+  const finalIds = st.map((p) => p.id);
 
   await page.fill('#guest', 'Rustee & Levi');
 
   // The phone photo is shown upright and full size in the preview, with the shape the render uses.
   const phoneAt = finalOrder.indexOf(ph.url);
-  const s0 = (await page.evaluate(() => window.pocketace.plan.shots))[phoneAt];
-  await page.$eval('#audio', (a, t) => { a.currentTime = t; }, 781 + (s0.start + s0.end) / 2);
+  await page.locator('#strip .tile').nth(phoneAt).click();
   await page.waitForTimeout(500);
   const layer = await page.evaluate((i) => { const l = document.querySelectorAll('#layers .layer')[i]; const img = l.querySelector('.fg img'); return { w: img.naturalWidth, h: img.naturalHeight, opacity: l.style.opacity }; }, phoneAt);
   check(layer.w === 3024 && layer.h === 4032 && layer.opacity === '1', 'the preview shows the imported phone photo upright at full resolution', `${layer.w}×${layer.h}`);
@@ -237,6 +286,7 @@ try {
   await page.reload();
   await page.waitForSelector('#strip .tile');
   check(JSON.stringify(await storyUrls()) === JSON.stringify(finalOrder), 'story order survives a reload');
+  check(JSON.stringify(await page.evaluate(() => window.pocketace.story.map((p) => p.id))) === JSON.stringify(finalIds), 'repeated copies survive a reload as separate copies');
   check((await val('#start')) === '13:01' && (await val('#end')) === '18:05', 'excerpt survives a reload');
   check((await val('#guest')) === 'Rustee & Levi', 'edited text survives a reload');
   check(JSON.stringify(await page.$$eval('details.step', (ds) => ds.map((d) => d.open))) === '[false,true,false,true]', 'open/closed sections survive a reload');
@@ -253,7 +303,19 @@ try {
   await page.click('#render');
   const sent = JSON.parse((await req).postData());
   check(JSON.stringify(sent.photos.map((p) => p.url)) === JSON.stringify(finalOrder) && sent.photos.every((p) => !('pin' in p)), 'render request uses the strip order, no pins');
-  await page.waitForSelector('#result:not([hidden])', { timeout: 15 * 60e3 });
+  check(/Making the video/.test(await page.textContent('#render')), 'progress shows in the button while it renders', await page.textContent('#render'));
+  await page.waitForSelector('#download:not([hidden])', { timeout: 15 * 60e3 });
+  await page.waitForTimeout(400);
+  const ready = await page.evaluate(() => {
+    const r = document.querySelector('#download').getBoundingClientRect();
+    const v = document.querySelector('#result-video');
+    const col = document.querySelector('#preview-col');
+    return { inView: r.top >= 0 && r.bottom <= innerHeight, video: !v.hidden && v.getBoundingClientRect().height > 200, again: document.querySelector('#render').textContent, overflow: getComputedStyle(col).overflowY, scrolls: col.scrollHeight > col.clientHeight + 1 };
+  });
+  await page.screenshot({ path: path.join(work, 'ready.png') });
+  check(ready.inView && ready.video, 'when the video is ready it plays in the phone frame, with Download MP4 in view');
+  check(ready.again === 'Make it again', 'Download MP4 becomes the main button; Make it again sits beside it');
+  check(ready.overflow === 'visible' && !ready.scrolls, 'the preview column has no scrolling of its own');
   const [download] = await Promise.all([page.waitForEvent('download'), page.click('#download')]);
   const mp4 = path.join(work, await download.suggestedFilename());
   await download.saveAs(mp4);
@@ -265,13 +327,31 @@ try {
   // the centre of the framed photo with the centre of each source photo.
   const shots = await page.evaluate(() => window.pocketace.plan.shots);
   const patch = (input, ss, crop) => execFileSync(ffmpeg, ['-v', 'fatal', ...(ss != null ? ['-ss', String(ss)] : []), '-i', input, '-frames:v', '1', '-vf', `${crop},scale=8:8,format=gray`, '-f', 'rawvideo', '-']);
-  const sources = finalOrder.map((u) => patch(u.startsWith('/') ? base + u : u, null, 'crop=iw*0.3:ih*0.3:iw*0.35:ih*0.35'));
+  const sources = finalOrder.map((u) => patch(u.startsWith('/') ? base + u : u, null, 'crop=iw*0.3:ih*0.3:iw*0.35:ih*0.35')); // repeats give identical sources; any of them counts
   const seen = shots.map((s) => {
     const f = patch(mp4, (s.start + s.end) / 2, `crop=iw*0.12:ih*0.05:iw*0.44:ih*${0.43 - 0.025}`);
     const dist = sources.map((src) => src.reduce((acc, b, k) => acc + Math.abs(b - f[k]), 0));
     return dist.indexOf(Math.min(...dist));
   });
-  check(seen.every((idx, i) => idx === i), 'each shot in the MP4 shows the photo in that strip position (imported ones included)', `matched ${JSON.stringify(seen)}`);
+  check(seen.every((idx, i) => finalOrder[idx] === finalOrder[i]), 'each shot in the MP4 shows the photo in that strip position (repeats and imports included)', `matched ${JSON.stringify(seen)}`);
+
+  // Changing anything puts "Make the video" back in front, and keeps the earlier file reachable.
+  await page.$eval('#step-episode', (d) => { d.open = true; });
+  await page.fill('#guest', 'Rustee & Levi!');
+  const edited = await page.evaluate(() => ({ btn: document.querySelector('#render').textContent, primary: document.querySelector('#render').classList.contains('primary'), dl: document.querySelector('#download').hidden, earlier: !document.querySelector('#earlier').hidden, stage: !document.querySelector('#stage').hidden }));
+  check(edited.btn === 'Make the video' && edited.primary && edited.dl && edited.earlier && edited.stage, 'after an edit: Make the video again, live preview back, earlier file still offered');
+  check(!/^Ready/.test(await page.textContent('#job-status')), 'and the "Ready" line goes, since it no longer is');
+
+  // Smaller Mac screens: one page scroll, and the render button stays in reach beside the strip.
+  for (const [w, h] of [[1280, 720], [1440, 800]]) {
+    await page.setViewportSize({ width: w, height: h });
+    await page.locator('#strip-wrap').scrollIntoViewIfNeeded();
+    await page.waitForTimeout(300);
+    const fit = await page.evaluate(() => { const b = document.querySelector('#render').getBoundingClientRect(); const ph = document.querySelector('.phone').getBoundingClientRect(); return { btn: b.top >= 0 && b.bottom <= innerHeight, phone: ph.height > 250 && ph.top > -1 }; });
+    await page.screenshot({ path: path.join(work, `arrange-${w}x${h}.png`) });
+    check(fit.btn && fit.phone, `${w}×${h}: preview and Make the video in view while arranging the story`);
+  }
+  await page.setViewportSize({ width: 1440, height: 900 });
 
   // ---- Removing imported photos ----
   const removeByName = async (n) => {
@@ -286,7 +366,7 @@ try {
   page.once('dialog', (d) => { asked = d.message(); d.accept(); });
   await removeByName('studio.png');
   const after = await storyUrls();
-  check(asked.includes('in your story') && after.length === 7 && after.every((u) => !u.endsWith('.png')), 'removing one that is in the story asks first, then takes it out of the story too', asked);
+  check(asked.includes('in your story') && after.length === finalOrder.length - 1 && after.every((u) => !u.endsWith('.png')), 'removing one that is in the story asks first, then takes it out of the story too', asked);
   // A file that has vanished from the computer is shown as missing, not silently broken.
   const id = ph.url.slice('/uploads/'.length, '/uploads/'.length + 64);
   for (const f of readdirSync(path.join(data, 'uploads')).filter((f) => f.startsWith(id))) rmSync(path.join(data, 'uploads', f));

@@ -14,7 +14,7 @@ import { placement } from '../public/look.js';
 
 const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 
-test('import → gallery thumbnail → render with an imported, sideways phone photo', { timeout: 120e3 }, async () => {
+test('import → gallery thumbnail → render with an imported, sideways phone photo, used twice', { timeout: 120e3 }, async () => {
   const site = await startFixtureSite();
   const data = mkdtempSync(path.join(os.tmpdir(), 'pocketace-data-'));
   const port = 19100 + Math.floor(Math.random() * 800);
@@ -49,11 +49,11 @@ test('import → gallery thumbnail → render with an imported, sideways phone p
     assert.equal(pdf.status, 415);
     assert.equal(readdirSync(path.join(data, 'uploads')).filter((f) => f.startsWith('.incoming')).length, 0);
 
-    // Render: the imported photo first, then one from the (stand-in) website.
+    // Render: the imported photo, one from the (stand-in) website, then the imported one again.
     const ep = await (await fetch(`${api}/api/episode?url=${encodeURIComponent(`${site.origin}/episodes/32/linda-shider`)}`)).json();
     const job = await (await fetch(`${api}/api/render`, {
       method: 'POST', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ audioUrl: ep.audio[0].url, start: 10, end: 22, quality: 'draft', guest: 'Test', subtitle: '', photos: [{ url: photo.url }, { url: ep.images[0].url }] }),
+      body: JSON.stringify({ audioUrl: ep.audio[0].url, start: 10, end: 22, quality: 'draft', guest: 'Test', subtitle: '', photos: [{ url: photo.url }, { url: ep.images[0].url }, { url: photo.url }] }),
     })).json();
     assert.ok(job.id, job.error);
     let j;
@@ -63,13 +63,16 @@ test('import → gallery thumbnail → render with an imported, sideways phone p
       await new Promise((ok) => setTimeout(ok, 500));
     }
     assert.equal(j.status, 'done', j.error);
-    // Three seconds in, the imported photo is on screen, framed upright (draft is half size).
+    // Shots are 4 s each. The imported photo is on screen, framed upright, in the
+    // first and third; the website photo in the middle (draft is half size).
     const box = placement(200, 300);
     const k = 0.5, inset = 0.15;
     const crop = `crop=${Math.round(box.w * k * (1 - 2 * inset))}:${Math.round(box.h * k * (1 - 2 * inset))}:${Math.round((box.x + box.w * inset) * k)}:${Math.round((box.y + box.h * inset) * k)}`;
     const mp4 = path.join(data, 'out.mp4');
     writeFileSync(mp4, Buffer.from(await (await fetch(`${api}/api/jobs/${job.id}/video`)).arrayBuffer()));
-    assert.equal(quadrants(mp4, { pre: ['-ss', '3'], vf: crop }).q, 'BRWG');
+    assert.equal(quadrants(mp4, { pre: ['-ss', '2'], vf: crop }).q, 'BRWG');
+    assert.notEqual(quadrants(mp4, { pre: ['-ss', '6'], vf: crop }).q, 'BRWG');
+    assert.equal(quadrants(mp4, { pre: ['-ss', '10'], vf: crop }).q, 'BRWG');
 
     // If the imported file disappears, a render says so before starting.
     for (const f of readdirSync(path.join(data, 'uploads'))) rmSync(path.join(data, 'uploads', f));
