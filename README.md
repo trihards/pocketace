@@ -8,7 +8,7 @@ Paste an episode page address, drag the excerpt handles over the episode, tap ph
 
 - All 33 feed items look up cleanly from all three sources (Squarespace JSON, page HTML, RSS). Audio is found for all 32 episodes; the 33rd item is a tribute post with no audio.
 - Audio: 30 episodes are MP3s in the S3 bucket `www.davekostiuk.com` (us-west-1), 2 are on Squarespace. They serve byte ranges, so browsers can seek. Ep 32 is 118 MB, 82 min.
-- Photos: 446 across the catalogue (469 before folding episode thumbnails into the body photo they repeat; 23 of 27 thumbnails are such twins, matched by file name). Of the 441 with sizes in the page markup, the median long side is 726 px and 341 are under 1080 px. The render never enlarges a photo more than 25% (`public/look.js`), so small photos sit smaller on screen instead of going soft.
+- Photos: 446 across the catalogue (469 before folding episode thumbnails into the body photo they repeat; 23 of 27 thumbnails are such twins, matched by file name). Of the 441 with sizes in the page markup, the median long side is 726 px and 341 are under 1080 px. Photos are enlarged as far as the layout needs (often 2× or more), accepting some softness so the photograph dominates the frame; see How photos are shown.
 - Transcripts: none. Episode pages carry long narrative show notes (Ep 32: ~1,500 words), credits and a track list.
 - Loudness: episodes are mastered quiet (Ep 32: −29 LUFS). Renders are normalised to −16 LUFS.
 - A real render (Ep 32 audio from S3, 60 s, 1080×1920) took 54 s including the 118 MB download, and the cut is sample-accurate.
@@ -74,7 +74,7 @@ poll /api/jobs/:id ◀──────────────────  pr
 Files worth knowing:
 
 - `public/schedule.js`: how long each photo stays on screen. Photos play in exactly the strip order; the excerpt is split by weight (all 1 for now, so evenly). Shared by browser and server, so the preview matches the render. Weights are the hook for dragging the boundaries between tiles later.
-- `public/look.js`: the visual rules (when a photo fills the frame vs. is framed, margins, crossfade length, camera moves). Change a number here and both preview and render follow.
+- `public/look.js`: the visual rules: where a photo is drawn at any moment (whole or fill, focus point, pan or push), the backdrop, how the name wraps, crossfade length. The preview and the render both call it, so a number changed here changes both.
 - `public/captions.js`: SRT/VTT parsing, clipping to the excerpt, SRT output.
 - `lib/render.js`: the FFmpeg command builder. Each render writes its final FFmpeg arguments to `ffmpeg-final-args.json` in the job folder, for debugging.
 - `lib/extract.js`: episode lookup. Every finding records which source it came from.
@@ -85,8 +85,19 @@ Files worth knowing:
 ## Using it
 
 - **Two kinds of listening.** The episode player in Excerpt is for exploring the whole recording: it plays and jumps freely, and **Use current time** takes its position. **▶ Play excerpt** under the preview plays only the selection: from Start (or from the photo last clicked on the strip) to End, and the preview, strip playhead and clock follow it. Moving Start or End sends the excerpt back to its start. Jumping around in the episode player while the excerpt plays lets go of the excerpt and leaves the preview where it was.
+- **Whole photo or fill frame.** Select a photo on the strip to choose for that copy. Dragging a filled photo in the preview (or the arrow keys, with the preview focused) moves what shows; **Recentre** undoes that.
 - **The gallery is a supply.** Every tap adds that photo once more to the end of the story; the badge (×2, ×3…) counts how often it's used. Each copy is its own tile: drag it, or take it out with its **✕** on the strip (or select it and press Remove or Delete).
 - **One page scroll.** On a desktop the preview stays pinned beside the builder. When a video is ready it plays in the phone frame and the main button becomes **Download MP4**, with **Make it again** next to it. Change anything and **Make the video** comes back, with a link to the earlier file. After a reload the last video is offered again while the server still has it.
+
+## How photos are shown
+
+Tested on real archive photos (wide stage shots, group portraits, 300–500 px album art, small portraits, a painting) in several treatments before choosing these. The aim: the audience sees the photograph, not a small reproduction of it.
+
+- **Whole photo** (the default for anything wider than about 9:16): the entire image, as large as the frame allows, edge to edge for landscapes, with no limit on enlargement. Nothing is cut off, so it's right for groups, artwork and documents. Behind it, a blurred copy of the same photo, dimmed to 38% and muted, so it frames the photo without competing. Tall photos run under the name; the shading keeps the type readable.
+- **Fill frame**: the photo covers the whole frame and is cropped. It's automatic only for photos already close to 9:16 (less than a tenth of the width lost). For anything else it's Ace's call, because a centred crop of a group shot cuts people out. He positions it by dragging in the preview. Filling a small photo enlarges it a lot; past 4× the app says it will look soft.
+- **Movement, only where it helps.** Whole photos and short shots (under 6 s) hold still. A filled photo that hides a lot at the sides and hasn't been positioned pans slowly across (at most 30 px a second), so nobody at the edges stays hidden; neighbouring pans alternate direction. Once Ace positions a filled photo, his framing holds and it only pushes in by 5% towards it.
+
+Preview and render compute the same geometry from `public/look.js`; checked frame by frame on real photos (pans and pushes included), they differ by at most 3 levels out of 255 on average.
 
 ## Photos from your computer
 

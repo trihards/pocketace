@@ -19,6 +19,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { tools } from '../lib/ffmpeg.js';
 import { withOrientation } from '../test/images.js';
+import { layout, motionFor, rectAt, transitionFor, W as CW, H as CH } from '../public/look.js';
 
 const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const arg = (name, dflt) => { const i = process.argv.indexOf(`--${name}`); return i > 0 ? process.argv[i + 1] : dflt; };
@@ -262,8 +263,37 @@ try {
   check((await page.locator('#gallery .thumb').nth(g0).locator('.badge').textContent()) === '×2', 'and the badge counts down');
   const layerSrcs = await page.evaluate(() => [...document.querySelectorAll('#layers .layer .fg img')].map((i) => i.getAttribute('src')));
   check(JSON.stringify(layerSrcs) === JSON.stringify(st.map((p) => p.url)), 'the preview plays every copy, in strip order');
+
+  // ---- Whole photo or fill frame, per copy ----
+  await page.locator('#strip-wrap').scrollIntoViewIfNeeded();
+  await page.locator('#strip .tile').nth(0).click();
+  const pressed = () => page.$eval('.fit [aria-pressed="true"]', (b) => b.dataset.fit);
+  check((await pressed()) === 'whole', 'a landscape photo is shown whole unless chosen otherwise');
+  await page.click('[data-fit="fill"]');
+  let s0 = await page.evaluate(() => window.pocketace.story[0]);
+  check(s0.fit === 'fill' && (await page.locator('#strip .tile').nth(0).getAttribute('class')).includes('filled') && /Drag the photo/.test(await page.textContent('#fit-hint')), 'Fill frame applies to that copy, and says how to reposition it');
+  const imgLeft = () => page.evaluate(() => { const t = window.pocketace.plan.shots[0]; return document.querySelectorAll('#layers .layer .fg img')[0].style.left; });
+  const before = await imgLeft();
+  const stageBox = await page.locator('#stage').boundingBox();
+  await page.mouse.move(stageBox.x + stageBox.width / 2, stageBox.y + stageBox.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(stageBox.x + stageBox.width / 2 + 60, stageBox.y + stageBox.height / 2, { steps: 6 });
+  await page.mouse.up();
+  s0 = await page.evaluate(() => window.pocketace.story[0]);
+  check(Number.isFinite(s0.fx) && s0.fx < 0.5 && (await imgLeft()) !== before, 'dragging the preview moves what the filled photo shows', `focus ${s0.fx?.toFixed(3)}`);
+  const fxDragged = s0.fx;
+  await page.focus('#stage'); await page.keyboard.press('ArrowRight');
+  s0 = await page.evaluate(() => window.pocketace.story[0]);
+  check(s0.fx > fxDragged, 'arrow keys on the preview move it too', `focus ${s0.fx.toFixed(3)}`);
+  await page.click('#recentre');
+  s0 = await page.evaluate(() => window.pocketace.story[0]);
+  check(s0.fx === undefined && s0.fit === 'fill', 'Recentre goes back to the middle');
+  await page.focus('#stage'); for (let k = 0; k < 3; k++) await page.keyboard.press('ArrowLeft');
+  const otherCopy = (await page.evaluate(() => window.pocketace.story)).findIndex((p, i) => i > 0 && p.url === firstUrl);
+  check((await page.evaluate((i) => window.pocketace.story[i].fit, otherCopy)) === undefined, 'another copy of the same photo keeps its own setting');
   const finalOrder = await storyUrls();
   const finalIds = st.map((p) => p.id);
+  const finalLooks = await page.evaluate(() => window.pocketace.story.map((p) => ({ fit: p.fit, fx: p.fx, fy: p.fy })));
 
   await page.fill('#guest', 'Rustee & Levi');
 
@@ -280,6 +310,8 @@ try {
   const open = await page.$$eval('details.step', (ds) => ds.map((d) => d.open));
   check(JSON.stringify(open) === '[false,true,false,true]', 'closing two sections leaves the others open', JSON.stringify(open));
   check(await page.isVisible('#sum-photos'), 'a collapsed section still shows its summary');
+  const shut = await page.$$eval('details.step:not([open])', (ds) => ds.map((d) => Math.round(d.getBoundingClientRect().height)));
+  check(shut.every((h) => h < 80), 'collapsed sections stay compact', `${shut.join(', ')} px`);
 
   // ---- Survives a reload ----
   await page.waitForTimeout(600);
@@ -287,6 +319,7 @@ try {
   await page.waitForSelector('#strip .tile');
   check(JSON.stringify(await storyUrls()) === JSON.stringify(finalOrder), 'story order survives a reload');
   check(JSON.stringify(await page.evaluate(() => window.pocketace.story.map((p) => p.id))) === JSON.stringify(finalIds), 'repeated copies survive a reload as separate copies');
+  check(JSON.stringify(await page.evaluate(() => window.pocketace.story.map((p) => ({ fit: p.fit, fx: p.fx, fy: p.fy })))) === JSON.stringify(finalLooks), 'whole/fill choices and positions survive a reload');
   check((await val('#start')) === '13:01' && (await val('#end')) === '18:05', 'excerpt survives a reload');
   check((await val('#guest')) === 'Rustee & Levi', 'edited text survives a reload');
   check(JSON.stringify(await page.$$eval('details.step', (ds) => ds.map((d) => d.open))) === '[false,true,false,true]', 'open/closed sections survive a reload');
@@ -302,7 +335,7 @@ try {
   const req = page.waitForRequest((r) => r.url().endsWith('/api/render'));
   await page.click('#render');
   const sent = JSON.parse((await req).postData());
-  check(JSON.stringify(sent.photos.map((p) => p.url)) === JSON.stringify(finalOrder) && sent.photos.every((p) => !('pin' in p)), 'render request uses the strip order, no pins');
+  check(JSON.stringify(sent.photos.map((p) => p.url)) === JSON.stringify(finalOrder) && sent.photos.every((p) => !('pin' in p)) && sent.photos[0].fit === 'fill' && sent.photos[0].fx === finalLooks[0].fx, 'render request uses the strip order and each copy\'s whole/fill choice');
   check(/Making the video/.test(await page.textContent('#render')), 'progress shows in the button while it renders', await page.textContent('#render'));
   await page.waitForSelector('#download:not([hidden])', { timeout: 15 * 60e3 });
   await page.waitForTimeout(400);
@@ -327,13 +360,26 @@ try {
   // the centre of the framed photo with the centre of each source photo.
   const shots = await page.evaluate(() => window.pocketace.plan.shots);
   const patch = (input, ss, crop) => execFileSync(ffmpeg, ['-v', 'fatal', ...(ss != null ? ['-ss', String(ss)] : []), '-i', input, '-frames:v', '1', '-vf', `${crop},scale=8:8,format=gray`, '-f', 'rawvideo', '-']);
-  const sources = finalOrder.map((u) => patch(u.startsWith('/') ? base + u : u, null, 'crop=iw*0.3:ih*0.3:iw*0.35:ih*0.35')); // repeats give identical sources; any of them counts
-  const seen = shots.map((s) => {
-    const f = patch(mp4, (s.start + s.end) / 2, `crop=iw*0.12:ih*0.05:iw*0.44:ih*${0.43 - 0.025}`);
-    const dist = sources.map((src) => src.reduce((acc, b, k) => acc + Math.abs(b - f[k]), 0));
-    return dist.indexOf(Math.min(...dist));
+  // For each shot, the patch of the source photo that look.js says sits under
+  // the sampled spot of the frame at mid-shot: whole or filled, panned or pushed.
+  const dims = await page.evaluate(() => [...document.querySelectorAll('#layers .layer .fg img')].map((i) => ({ width: i.naturalWidth, height: i.naturalHeight })));
+  const story = await page.evaluate(() => window.pocketace.story);
+  const T = transitionFor(shots);
+  const spot = { x: CW * 0.46, y: CH * 0.41, w: CW * 0.08, h: CH * 0.04 };
+  const expected = shots.map((s, i) => {
+    const L = layout({ ...dims[i], fit: story[i].fit, fx: story[i].fx, fy: story[i].fy });
+    const clipStart = i > 0 ? s.start - T : 0, mid = (s.start + s.end) / 2;
+    const R = rectAt(L, motionFor(L, s.end - clipStart, i), (mid - clipStart) / (s.end - clipStart));
+    const fx = (spot.x - R.x) / R.w, fy = (spot.y - R.y) / R.h;
+    return patch(story[i].url.startsWith('/') ? base + story[i].url : story[i].url, null, `crop=iw*${(spot.w / R.w).toFixed(5)}:ih*${(spot.h / R.h).toFixed(5)}:iw*${fx.toFixed(5)}:ih*${fy.toFixed(5)}`);
   });
-  check(seen.every((idx, i) => finalOrder[idx] === finalOrder[i]), 'each shot in the MP4 shows the photo in that strip position (repeats and imports included)', `matched ${JSON.stringify(seen)}`);
+  const dist = (a, b) => a.reduce((acc, v, k) => acc + Math.abs(v - b[k]), 0);
+  const seen = shots.map((s, i) => {
+    const f = patch(mp4, (s.start + s.end) / 2, `crop=iw*${spot.w / CW}:ih*${spot.h / CH}:iw*${spot.x / CW}:ih*${spot.y / CH}`);
+    const d = expected.map((e) => dist(e, f));
+    return d[i] <= Math.min(...d) ? i : d.indexOf(Math.min(...d)); // ties (repeats) count as a match
+  });
+  check(seen.every((idx, i) => idx === i), 'each shot in the MP4 shows the expected part of the photo in that strip position (fills, repeats and imports included)', `matched ${JSON.stringify(seen)}`);
 
   // Changing anything puts "Make the video" back in front, and keeps the earlier file reachable.
   await page.$eval('#step-episode', (d) => { d.open = true; });

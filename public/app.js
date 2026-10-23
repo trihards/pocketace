@@ -1,6 +1,6 @@
 import { schedule, fmt, parseTime } from './schedule.js';
 import { parseCaptions, clipCues } from './captions.js';
-import { motion, placement, transitionFor } from './look.js';
+import { layout, motionFor, rectAt, defaultFit, transitionFor, BACKDROP, SOFT_UPSCALE, WRAP, wrapLines, W as CW, H as CH } from './look.js';
 
 const $ = (s) => document.querySelector(s);
 const state = {
@@ -330,7 +330,7 @@ function renderGallery() {
     if (uses) b.append(el('span', { className: 'badge', textContent: `×${uses}`, title: `In the story ${uses === 1 ? 'once' : `${uses} times`}` }));
     if (p.width) {
       const low = Math.max(p.width, p.height) < 800;
-      b.append(el('span', { className: `res${low ? ' low' : ''}`, textContent: `${p.width}×${p.height}`, title: low ? 'Small photo: it will appear smaller on screen' : '' }));
+      b.append(el('span', { className: `res${low ? ' low' : ''}`, textContent: `${p.width}×${p.height}`, title: low ? 'Small original: it will look soft at full size' : '' }));
     }
     b.addEventListener('click', () => addToStory(p.url));
     item.append(b);
@@ -392,6 +392,7 @@ function renderStrip() {
     b.parentElement.style.flexGrow = String(d);
     b.querySelector('.dur').textContent = s ? fmtShort(d) : '';
     b.classList.toggle('sel', i === sel);
+    b.classList.toggle('filled', fitOf(state.story[i]) === 'fill');
     b.setAttribute('aria-pressed', i === sel);
     b.tabIndex = i === (sel >= 0 ? sel : 0) ? 0 : -1;
     b.setAttribute('aria-label', `Photo ${i + 1} of ${tiles.length}` + (s ? `, ${fmt(s.start)} to ${fmt(s.end)}` : ''));
@@ -403,6 +404,7 @@ function renderStrip() {
   if (sel >= 0) {
     const s = shots[sel];
     $('#sel-info').textContent = `Photo ${sel + 1} of ${state.story.length}` + (s ? ` · ${fmt(s.start)}–${fmt(s.end)}` : '');
+    renderFitTools(state.story[sel]);
     $('#move-earlier').disabled = sel === 0;
     $('#move-later').disabled = sel === state.story.length - 1;
   }
@@ -537,6 +539,108 @@ function drawStripPlayhead() {
   ph.style.left = `${cell.offsetLeft + ((t - s.start) / (s.end - s.start)) * cell.offsetWidth}px`;
 }
 
+// ---------- How each photo is shown: whole, or filling the frame ----------
+// Each copy in the story has its own choice. Until Ace picks, look.js decides
+// (photos already close to 9:16 fill, everything else is shown whole).
+function dimsOf(item) {
+  const layer = layers.find((l) => l.item === item);
+  if (layer?.dims) return layer.dims;
+  const lib = state.library.find((l) => l.url === item.url);
+  return lib?.width ? { width: lib.width, height: lib.height } : null;
+}
+function fitOf(item) {
+  if (!item) return null;
+  if (item.fit) return item.fit;
+  const d = dimsOf(item);
+  return d ? defaultFit(d.width, d.height) : 'whole';
+}
+function renderFitTools(item) {
+  const fit = fitOf(item);
+  document.querySelectorAll('[data-fit]').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.fit === fit)));
+  const d = dimsOf(item);
+  const soft = fit === 'fill' && d && layoutOf(item, d).upscale > SOFT_UPSCALE;
+  $('#fit-hint').textContent = fit === 'fill'
+    ? `Drag the photo in the preview to choose what shows.${soft ? ' This photo is small, so filling the frame makes it soft.' : ''}`
+    : 'The entire photo, nothing cut off.';
+  $('#recentre').hidden = fit !== 'fill' || (item.fx === undefined && item.fy === undefined);
+}
+document.querySelectorAll('[data-fit]').forEach((b) => b.addEventListener('click', () => {
+  const i = selectedIndex();
+  if (i < 0) return;
+  state.story[i].fit = b.dataset.fit;
+  showShot(i);
+  refresh();
+}));
+$('#recentre').addEventListener('click', () => {
+  const i = selectedIndex();
+  if (i < 0) return;
+  delete state.story[i].fx; delete state.story[i].fy;
+  showShot(i);
+  refresh();
+});
+// Bring a shot into the preview unless it is already on screen.
+function showShot(i) {
+  const s = state.plan.shots[i];
+  const t = previewTime();
+  if (s && !(t >= s.start && t < s.end)) setPreviewTime(s.start + Math.min(1, (s.end - s.start) / 3));
+}
+// The photo on screen at the preview's moment (the incoming one during a fade).
+function onScreen() {
+  const t = previewTime();
+  const i = state.plan.shots.findIndex((s) => t >= s.start && t < s.end);
+  return i >= 0 && layers[i]?.dims ? layers[i] : null;
+}
+
+// Drag a filled photo in the preview (or use the arrow keys) to move what shows.
+// The focus point is set from where the crop actually lands, so dragging past
+// an edge never builds up slack that has to be dragged back first.
+function moveFocus(layer, dx, dy) {
+  const item = layer.item;
+  const L = layoutOf(item, layer.dims);
+  const x = Math.min(Math.max(L.rect.x + dx, CW - L.rect.w), 0);
+  const y = Math.min(Math.max(L.rect.y + dy, CH - L.rect.h), 0);
+  item.fx = (CW / 2 - x) / L.rect.w;
+  item.fy = (CH / 2 - y) / L.rect.h;
+}
+const stage = $('#stage');
+stage.addEventListener('pointerdown', (e) => {
+  const layer = onScreen();
+  if (!layer || fitOf(layer.item) !== 'fill' || e.button !== 0) return;
+  e.preventDefault();
+  stage.setPointerCapture(e.pointerId);
+  stage.classList.add('dragging-photo');
+  state.selected = layer.item.id;
+  if (!layer.item.fit) layer.item.fit = 'fill';
+  let last = { x: e.clientX, y: e.clientY };
+  const scale = CW / stage.getBoundingClientRect().width;
+  const move = (ev) => {
+    moveFocus(layer, (ev.clientX - last.x) * scale, (ev.clientY - last.y) * scale);
+    last = { x: ev.clientX, y: ev.clientY };
+    drawFrame();
+  };
+  const up = () => {
+    stage.classList.remove('dragging-photo');
+    stage.removeEventListener('pointermove', move);
+    stage.removeEventListener('pointerup', up);
+    stage.removeEventListener('pointercancel', up);
+    refresh();
+  };
+  stage.addEventListener('pointermove', move);
+  stage.addEventListener('pointerup', up);
+  stage.addEventListener('pointercancel', up);
+});
+stage.addEventListener('keydown', (e) => {
+  const layer = onScreen();
+  const d = { ArrowLeft: [1, 0], ArrowRight: [-1, 0], ArrowUp: [0, 1], ArrowDown: [0, -1] }[e.key];
+  if (!layer || !d || fitOf(layer.item) !== 'fill') return;
+  e.preventDefault();
+  const step = e.shiftKey ? 120 : 24; // canvas pixels; arrows move the view, so the photo goes the other way
+  if (!layer.item.fit) layer.item.fit = 'fill';
+  state.selected = layer.item.id;
+  moveFocus(layer, d[0] * step, d[1] * step);
+  refresh();
+});
+
 // ---------- Captions (optional, kept low-key) ----------
 $('#captions').addEventListener('change', async (e) => {
   const file = e.target.files[0];
@@ -568,23 +672,29 @@ function buildLayers() {
     const p = state.story[s.id];
     const layer = el('div', { className: 'layer' });
     const fg = el('div', { className: 'fg' });
-    const img = el('img', { src: p.url, alt: '' });
-    img.addEventListener('load', () => { layer.dataset.w = img.naturalWidth; layer.dataset.h = img.naturalHeight; place(layer); drawFrame(); }, { once: true });
+    const img = el('img', { src: p.url, alt: '', draggable: false });
+    img.addEventListener('load', () => { layer.dims = { width: img.naturalWidth, height: img.naturalHeight }; drawFrame(); renderStrip(); }, { once: true });
     fg.append(img);
-    layer.append(el('img', { className: 'bgimg', src: thumb(p.url), alt: '' }), fg);
-    layer.shot = s; layer.index = i;
+    const bg = el('img', { className: 'bgimg', src: thumb(p.url), alt: '' });
+    bg.style.filter = BACKDROP.css;
+    layer.append(bg, fg);
+    layer.shot = s; layer.index = i; layer.item = p;
     return layer;
   });
   box.replaceChildren(...layers);
 }
 
-function place(layer) {
-  const p = placement(Number(layer.dataset.w), Number(layer.dataset.h));
-  const fg = layer.querySelector('.fg');
-  layer.querySelector('.bgimg').hidden = p.fill;
-  if (p.fill) { Object.assign(fg.style, { left: '0', top: '0', width: '100%', height: '100%' }); return; }
+// The same geometry as the render: look.js says where the image is drawn at
+// this moment (rect) and which part of the canvas it may show in (clip).
+function layoutOf(item, dims) { return layout({ ...dims, fit: item.fit, fx: item.fx, fy: item.fy }); }
+function place(layer, f, clipSeconds) {
+  const L = layoutOf(layer.item, layer.dims);
+  const R = rectAt(L, motionFor(L, clipSeconds, layer.index), f);
+  const C = L.clip;
   const pct = (v, of) => `${(v / of) * 100}%`;
-  Object.assign(fg.style, { left: pct(p.x, 1080), top: pct(p.y, 1920), width: pct(p.w, 1080), height: pct(p.h, 1920) });
+  layer.querySelector('.bgimg').hidden = L.fit === 'fill';
+  Object.assign(layer.querySelector('.fg').style, { left: pct(C.x, CW), top: pct(C.y, CH), width: pct(C.w, CW), height: pct(C.h, CH) });
+  Object.assign(layer.querySelector('.fg img').style, { left: pct(R.x - C.x, C.w), top: pct(R.y - C.y, C.h), width: pct(R.w, C.w), height: pct(R.h, C.h) });
 }
 
 function drawFrame() {
@@ -601,20 +711,18 @@ function drawFrame() {
     if (visible && i > 0 && t < s.start) alpha = (t - clipStart) / T;
     layer.style.opacity = alpha;
     layer.style.zIndex = i;
-    if (!visible) return;
-    const m = motion(i);
+    if (!visible || !layer.dims) return;
     const f = Math.min(1, (t - clipStart) / (s.end - clipStart));
-    const z = m.z0 + (m.z1 - m.z0) * f;
-    const ox = (1 - 1 / z) * (m.x0 + (m.x1 - m.x0) * f) * 100;
-    const oy = (1 - 1 / z) * (m.y0 + (m.y1 - m.y0) * f) * 100;
-    layer.querySelector('.fg img').style.transform = `scale(${z}) translate(${-ox}%, ${-oy}%)`;
+    place(layer, f, s.end - clipStart);
   });
+  $('#stage').classList.toggle('can-drag', fitOf(onScreen()?.item) === 'fill');
   const cue = state.cues.find((c) => start + t >= c.start && start + t < c.end);
   const cap = $('#ov-caption');
   cap.hidden = !cue || t <= 0 || t >= end - start;
   if (cue) cap.replaceChildren(el('span', { textContent: cue.text }));
-  $('#ov-guest').textContent = $('#guest').value;
-  $('#ov-sub').textContent = $('#subtitle').value;
+  // Broken into lines exactly as the render breaks them.
+  $('#ov-guest').textContent = wrapLines($('#guest').value.toUpperCase(), WRAP.guest).join('\n');
+  $('#ov-sub').textContent = wrapLines($('#subtitle').value, WRAP.subtitle).join('\n');
   drawStripPlayhead();
 }
 
@@ -746,7 +854,7 @@ function writeSave() {
     start: $('#start').value,
     end: $('#end').value,
     library: state.library,
-    story: state.story.map((p) => ({ id: p.id, url: p.url })),
+    story: state.story.map((p) => ({ id: p.id, url: p.url, fit: p.fit, fx: p.fx, fy: p.fy })),
     selected: state.selected,
     guest: $('#guest').value,
     subtitle: $('#subtitle').value,
@@ -778,7 +886,8 @@ function restore() {
   state.story = Array.isArray(p.story) ? p.story.filter((s) => s && s.url).map((s) => {
     const id = s.id && !seen.has(s.id) ? s.id : newId();
     seen.add(id);
-    return { id, url: s.url };
+    const unit = (v) => (Number.isFinite(v) ? Math.min(Math.max(v, 0), 1) : undefined);
+    return { id, url: s.url, fit: s.fit === 'whole' || s.fit === 'fill' ? s.fit : undefined, fx: unit(s.fx), fy: unit(s.fy) };
   }) : [];
   state.selected = p.selected || null;
   $('#start').value = p.start ?? '0:00.0';
@@ -830,7 +939,7 @@ function renderBody() {
   const { start, end } = range();
   return {
     audioUrl: $('#audio-url').value.trim(), start, end,
-    photos: state.story.map((p) => ({ url: p.url })), // strip order is play order; repeats included
+    photos: state.story.map((p) => ({ url: p.url, fit: p.fit, fx: p.fx, fy: p.fy })), // strip order is play order; repeats included
     guest: $('#guest').value, subtitle: $('#subtitle').value,
     captions: state.cues.length ? state.captions.text : null,
     quality: document.querySelector('input[name=quality]:checked').value,

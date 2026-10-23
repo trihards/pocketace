@@ -40,7 +40,7 @@ input[type=text], input[type=url] { width: 100%; background: #120e14; border: 1p
 
 .layout { display: grid; grid-template-columns: minmax(0, 1fr) 380px; gap: 28px; padding: 8px max(16px, env(safe-area-inset-right)) 48px max(16px, env(safe-area-inset-left)); max-width: 1280px; margin: 0 auto; }
 @media (max-width: 900px), (max-height: 620px) { .layout { grid-template-columns: minmax(0, 1fr); } .preview-col { position: static !important; max-height: none !important; overflow: visible !important; } }
-.steps { display: grid; gap: 18px; min-width: 0; }
+.steps { display: grid; gap: 18px; min-width: 0; align-content: start; } /* collapsed sections stay compact when the preview column is taller */
 .step { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; min-width: 0; }
 .step > summary { list-style: none; cursor: pointer; display: flex; align-items: center; gap: 12px; flex-wrap: wrap; padding: 14px 18px; border-radius: 14px; }
 .step > summary::-webkit-details-marker { display: none; }
@@ -133,6 +133,12 @@ body.dragging, body.dragging * { cursor: grabbing !important; }
 .strip-tools { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 .strip-tools span { font-variant-numeric: tabular-nums; color: var(--muted); }
 .strip-tools button { padding: 6px 12px; font-size: 14px; }
+.fit-row { flex: 1 1 100%; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.fit { display: inline-flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+.fit button { border: 0; border-radius: 0; background: transparent; }
+.fit button[aria-pressed="true"] { background: var(--gold); color: #1b1208; font-weight: 800; }
+#fit-hint { font-size: 13px; }
+.tile.filled::after { content: 'Fill'; position: absolute; bottom: 3px; left: 3px; font-size: 10px; font-weight: 600; background: #000b; color: var(--gold); padding: 0 4px; border-radius: 4px; }
 @media (max-width: 600px) { #sel-info { flex: 1 1 100%; } .strip-tools .spacer { display: none; } }
 .warnings { margin: 0; padding-left: 18px; color: var(--gold); }
 
@@ -146,15 +152,18 @@ body.dragging, body.dragging * { cursor: grabbing !important; }
 /* Its own stacking context, so a later photo's z-index never rises above the type. */
 #layers { position: absolute; inset: 0; z-index: 0; }
 .layer { position: absolute; inset: 0; opacity: 0; }
-.layer .bgimg { position: absolute; inset: -6%; width: 112%; height: 112%; object-fit: cover; filter: blur(5cqw) brightness(.72) saturate(.8); }
+.layer .bgimg { position: absolute; inset: -6%; width: 112%; height: 112%; object-fit: cover; } /* filter: BACKDROP.css from look.js */
 .layer .fg { position: absolute; overflow: hidden; background: #000; } /* the render flattens transparent PNG/WebP onto black */
-.layer .fg img { width: 100%; height: 100%; object-fit: cover; transform-origin: 0 0; display: block; }
+.layer .fg img { position: absolute; max-width: none; display: block; } /* placed by look.js geometry, as in the render */
+.stage.can-drag { cursor: grab; }
+.stage.dragging-photo { cursor: grabbing; }
+.stage:focus-visible { outline: 2px solid var(--gold); outline-offset: 2px; }
 .shade { position: absolute; inset: 0; pointer-events: none;
   background: linear-gradient(to bottom, #0009 0%, #0000 16%, #0000 60%, #000d 100%); }
 .ov-brand { position: absolute; top: 4.8%; width: 100%; text-align: center; font-family: var(--display); color: var(--gold); font-size: 5.9cqw; }
 .ov-lower { position: absolute; top: 77%; width: 100%; text-align: center; padding: 0 4cqw; }
-#ov-guest { font-weight: 800; font-size: 7.8cqw; line-height: 1.12; text-transform: uppercase; }
-#ov-sub { color: var(--gold); font-weight: 600; font-size: 3.7cqw; margin-top: 1.3cqw; }
+#ov-guest { font-weight: 800; font-size: 7.8cqw; line-height: 1.12; text-transform: uppercase; white-space: pre; }
+#ov-sub { color: var(--gold); font-weight: 600; font-size: 3.7cqw; margin-top: 1.3cqw; white-space: pre; }
 .ov-caption { position: absolute; bottom: 29%; left: 8cqw; right: 8cqw; text-align: center; }
 .ov-caption span { background: #000b; font-weight: 700; font-size: 5.9cqw; line-height: 1.35; padding: .1em .35em; box-decoration-break: clone; -webkit-box-decoration-break: clone; white-space: pre-line; }
 .transport { display: flex; gap: 10px; align-items: center; }

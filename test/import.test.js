@@ -10,7 +10,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { startFixtureSite } from './fixture-site.js';
 import { quadrantsJpeg, withOrientation, quadrants } from './images.js';
-import { placement } from '../public/look.js';
+import { layout } from '../public/look.js';
 
 const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 
@@ -65,7 +65,7 @@ test('import → gallery thumbnail → render with an imported, sideways phone p
     assert.equal(j.status, 'done', j.error);
     // Shots are 4 s each. The imported photo is on screen, framed upright, in the
     // first and third; the website photo in the middle (draft is half size).
-    const box = placement(200, 300);
+    const box = layout({ width: 200, height: 300 }).rect;
     const k = 0.5, inset = 0.15;
     const crop = `crop=${Math.round(box.w * k * (1 - 2 * inset))}:${Math.round(box.h * k * (1 - 2 * inset))}:${Math.round((box.x + box.w * inset) * k)}:${Math.round((box.y + box.h * inset) * k)}`;
     const mp4 = path.join(data, 'out.mp4');

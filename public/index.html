@@ -106,6 +106,14 @@
           <button type="button" id="move-earlier">◀ Earlier</button>
           <button type="button" id="move-later">Later ▶</button>
           <button type="button" id="remove-photo">Remove</button>
+          <div class="fit-row">
+            <div class="fit" role="group" aria-label="How this photo is shown">
+              <button type="button" data-fit="whole" aria-pressed="false">Whole photo</button>
+              <button type="button" data-fit="fill" aria-pressed="false">Fill frame</button>
+            </div>
+            <span id="fit-hint" class="hint"></span>
+            <button type="button" id="recentre" class="quiet" hidden>Recentre</button>
+          </div>
         </div>
         <p id="strip-live" class="sr-only" aria-live="polite"></p>
         <ul id="warnings" class="warnings"></ul>
@@ -121,7 +129,7 @@
 
   <aside class="preview-col" id="preview-col">
     <div class="phone">
-      <div id="stage" class="stage">
+      <div id="stage" class="stage" tabindex="0" aria-label="Preview. When a filled photo is showing, drag it or use the arrow keys to choose what shows.">
         <div id="layers"></div>
         <div class="shade"></div>
         <div class="ov-brand">Aced Out</div>

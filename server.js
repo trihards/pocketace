@@ -109,7 +109,12 @@ async function startRender(req, res) {
   if (!allowed(body.audioUrl)) problems.push('The audio address is missing or not on an allowed host.');
   if (!(end > start + 5)) problems.push('The excerpt must be at least 5 seconds long.');
   if (end - start > MAX_EXCERPT) problems.push(`The excerpt can be at most ${MAX_EXCERPT / 60} minutes.`);
-  const photos = Array.isArray(body.photos) ? body.photos.slice(0, MAX_PHOTOS) : [];
+  // Each photo: its address, and how it is shown ("whole" or "fill", with the
+  // focus point for fill). Anything else is dropped; look.js picks defaults.
+  const unit = (v) => (Number.isFinite(v) ? Math.min(Math.max(v, 0), 1) : undefined);
+  const photos = (Array.isArray(body.photos) ? body.photos.slice(0, MAX_PHOTOS) : []).map((p) => ({
+    url: p?.url, fit: p?.fit === 'whole' || p?.fit === 'fill' ? p.fit : undefined, fx: unit(p?.fx), fy: unit(p?.fy),
+  }));
   if (!photos.length) problems.push('Pick at least one photo.');
   for (const [i, p] of photos.entries()) {
     const local = uploadFile(p.url);
@@ -147,7 +152,7 @@ async function pump() {
     const photos = new Map();
     for (const [i, p] of input.photos.entries()) {
       const file = uploadFile(p.url) || await cached(p.url, 40e6);
-      photos.set(`p${i}`, { file, ...(await probeImage(file)) });
+      photos.set(`p${i}`, { file, ...(await probeImage(file)), fit: p.fit, fx: p.fx, fy: p.fy });
       job.progress = 0.1 * (i + 1) / input.photos.length;
     }
     job.status = 'rendering';
