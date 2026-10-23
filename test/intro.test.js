@@ -30,31 +30,34 @@ const durations = (f) => JSON.parse(execFileSync(ffprobe, ['-v', 'error', '-show
 const frames = (f) => { const raw = execFileSync(ffmpeg, ['-v', 'error', '-i', f, '-vf', 'scale=27:48,format=gray', '-f', 'rawvideo', '-']); const n = 27 * 48; return Array.from({ length: raw.length / n }, (_, i) => raw.subarray(i * n, (i + 1) * n)); };
 const diff = (a, b) => a.reduce((s, v, i) => s + Math.abs(v - b[i]), 0) / a.length;
 
-test('with the show intro the story starts exactly when the intro ends, unchanged', { timeout: 300e3 }, async () => {
+test('with the show intro the story starts exactly when the intro ends, unchanged', { timeout: 240e3 }, async () => {
   const dir = mkdtempSync(path.join(os.tmpdir(), 'pocketace-intro-'));
   try {
     run(['-f', 'lavfi', '-i', 'anullsrc=r=44100:cl=stereo:d=10', '-f', 'lavfi', '-i', 'sine=f=1000:d=30:sample_rate=44100', '-filter_complex', '[1:a]aformat=channel_layouts=stereo,volume=0.3[t];[0:a][t]concat=n=2:v=0:a=1', '-c:a', 'libmp3lame', path.join(dir, 'ep.mp3')]);
     run(['-f', 'lavfi', '-i', 'mandelbrot=s=1600x1200', '-frames:v', '1', path.join(dir, 'a.jpg')]);
-    run(['-f', 'lavfi', '-i', 'testsrc2=s=1200x1800', '-frames:v', '1', path.join(dir, 'b.jpg')]);
+    // A limited-range photo between full-range JPEGs, as lossy WebPs decode.
+    // Mixed photos once stalled FFmpeg 8 at the first change, with or without the intro.
+    run(['-f', 'lavfi', '-i', 'testsrc2=s=1200x1800', '-frames:v', '1', '-pix_fmt', 'yuv420p', '-strict', '-1', path.join(dir, 'b.jpg')]);
     const photos = new Map();
     for (const id of ['a', 'b']) photos.set(id, { file: path.join(dir, `${id}.jpg`), ...(await probeImage(path.join(dir, `${id}.jpg`))) });
-    const { shots } = schedule({ duration: 12, photos: [{ id: 'a' }, { id: 'b' }] });
+    const { shots } = schedule({ duration: 18, photos: [{ id: 'a' }, { id: 'b' }, { id: 'a' }] });
     const splash = path.join(ROOT, 'public/intro/splash.png'), audio = path.join(ROOT, 'public/intro/audio.m4a');
     const I = Math.round(Number(execFileSync(ffprobe, ['-v', 'error', '-show_entries', 'format=duration', '-of', 'csv=p=0', audio])) * 30) / 30;
     const { width, height } = await probeImage(splash);
-    const render = (sub, intro) => renderVideo({ dir: path.join(dir, sub), audio: path.join(dir, 'ep.mp3'), start: 10, end: 22, shots, photos, quality: 'draft', guest: 'Test', subtitle: '', cues: [], intro });
+    const render = (sub, intro) => renderVideo({ dir: path.join(dir, sub), audio: path.join(dir, 'ep.mp3'), start: 10, end: 28, shots, photos, quality: 'draft', guest: 'Test', subtitle: '', cues: [], intro });
     execFileSync('mkdir', ['-p', path.join(dir, 'on'), path.join(dir, 'off')]);
     const on = await render('on', { splash, audio, duration: I, width, height });
     const off = await render('off', null);
 
-    for (const d of durations(on)) assert.ok(Math.abs(d - (I + 12)) < 0.02, `with intro: ${d}`);
-    for (const d of durations(off)) assert.ok(Math.abs(d - 12) < 0.02, `without: ${d}`);
+    for (const d of durations(on)) assert.ok(Math.abs(d - (I + 18)) < 0.02, `with intro: ${d}`);
+    for (const d of durations(off)) assert.ok(Math.abs(d - 18) < 0.02, `without: ${d}`);
     // The interview (the tone) starts I seconds later, to within 20 ms.
     assert.ok(Math.abs(toneOnset(on) - toneOnset(off) - I) < 0.02, `onsets ${toneOnset(on)} vs ${toneOnset(off)}`);
     // The story's frames line up best at a shift of exactly I.
     const fOn = frames(on), fOff = frames(off), F = Math.round(I * 30);
-    const score = (shift) => [150, 160, 170, 180, 190, 200].reduce((s, k) => s + diff(fOn[k + shift], fOff[k]), 0);
-    assert.ok(score(F) < score(F - 1) && score(F) < score(F + 1) && score(F) / 6 < 1, `shift scores ${score(F - 1)}, ${score(F)}, ${score(F + 1)}`);
+    const ks = fOff.map((_, k) => k).slice(30, -40);
+    const score = (shift) => ks.reduce((s, k) => s + diff(fOn[k + shift], fOff[k]), 0) / ks.length;
+    assert.ok(score(F) < score(F - 1) && score(F) < score(F + 1) && score(F) < 1, `shift scores ${score(F - 1)}, ${score(F)}, ${score(F + 1)}`);
     // Mid-intro: the splash whole and centred on the show's purple.
     const k = 540 / 1080, r = splashRect(width, height);
     const px = (y) => execFileSync(ffmpeg, ['-v', 'error', '-ss', '2', '-i', on, '-frames:v', '1', '-vf', `crop=2:2:270:${Math.round(y / 2) * 2},scale=1:1`, '-f', 'rawvideo', '-pix_fmt', 'rgb24', '-']);
