@@ -135,7 +135,9 @@
         <div class="ov-brand">Aced Out</div>
         <div id="ov-caption" class="ov-caption" hidden></div>
         <div class="ov-lower"><div id="ov-guest"></div><div id="ov-sub"></div></div>
+        <div id="intro-card" class="intro-card" hidden><img id="intro-splash" src="intro/splash.png" alt="Aced Out Podcast: Dispatches from Planet Funk"></div>
       </div>
+      <audio id="intro-audio" src="intro/preview.wav" preload="auto"></audio>
       <video id="result-video" class="result-video" controls playsinline preload="metadata" hidden></video>
     </div>
     <div class="transport" id="transport">
@@ -148,6 +150,7 @@
     </div>
     <div class="render">
       <p id="render-blocked" class="blocked" role="alert" hidden></p>
+      <label class="intro-opt" id="intro-opt" hidden><input type="checkbox" id="intro" checked> Include show intro <span id="intro-len" class="hint"></span></label>
       <fieldset class="quality">
         <label><input type="radio" name="quality" value="draft" checked> Quick draft (540×960)</label>
         <label><input type="radio" name="quality" value="final"> Final 1080×1920</label>

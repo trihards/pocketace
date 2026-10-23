@@ -89,6 +89,17 @@ Files worth knowing:
 - **The gallery is a supply.** Every tap adds that photo once more to the end of the story; the badge (×2, ×3…) counts how often it's used. Each copy is its own tile: drag it, or take it out with its **✕** on the strip (or select it and press Remove or Delete).
 - **One page scroll.** On a desktop the preview stays pinned beside the builder. When a video is ready it plays in the phone frame and the main button becomes **Download MP4**, with **Make it again** next to it. Change anything and **Make the video** comes back, with a link to the earlier file. After a reload the last video is offered again while the server still has it.
 
+## Show intro
+
+**Include show intro** (under the preview, on by default, saved with the project) puts the standard Aced Out intro before the story: the splash artwork, whole and centred on the show's purple (`#250032`), for as long as the intro audio lasts, crossfading into the story's first frame in its last half second. The interview then starts exactly at the chosen Start. Nothing about the story changes: its photo timings and the excerpt are the same with the intro on or off; the video is simply the intro's length longer, which the clock and the checkbox show. Play excerpt in the preview plays it too when starting from the beginning of the story (clicking into the story skips it, as before).
+
+The files are fixed packaging, not something to upload per project:
+
+- `public/intro/splash.png`: the artwork (currently the 2000×1125 "Dispatches from Planet Funk" splash). Any size or shape; it's fitted whole.
+- `public/intro/audio.m4a`: the intro audio (currently the 6.0 s track from `intro for now.mp4`; its video was ignored). `.mp3` or `.wav` work too. The intro lasts exactly as long as this file.
+
+Replace either and restart `npm start`. Loudness: in the MP4 the intro and the interview are both levelled to -16 LUFS. In the preview, the server measures the excerpt (a few seconds to read it from the episode) and plays the intro at the matching level.
+
 ## How photos are shown
 
 Tested on real archive photos (wide stage shots, group portraits, 300–500 px album art, small portraits, a painting) in several treatments before choosing these. The aim: the audience sees the photograph, not a small reproduction of it.

@@ -164,6 +164,10 @@ body.dragging, body.dragging * { cursor: grabbing !important; }
 .ov-lower { position: absolute; top: 77%; width: 100%; text-align: center; padding: 0 4cqw; }
 #ov-guest { font-weight: 800; font-size: 7.8cqw; line-height: 1.12; text-transform: uppercase; white-space: pre; }
 #ov-sub { color: var(--gold); font-weight: 600; font-size: 3.7cqw; margin-top: 1.3cqw; white-space: pre; }
+/* The show intro in the preview: the splash on the show's purple, above everything. */
+.intro-card { position: absolute; inset: 0; z-index: 3; pointer-events: none; }
+.intro-card img { position: absolute; max-width: none; display: block; }
+.intro-opt { display: flex; gap: 8px; align-items: baseline; color: var(--ink); font-size: 14px; }
 .ov-caption { position: absolute; bottom: 29%; left: 8cqw; right: 8cqw; text-align: center; }
 .ov-caption span { background: #000b; font-weight: 700; font-size: 5.9cqw; line-height: 1.35; padding: .1em .35em; box-decoration-break: clone; -webkit-box-decoration-break: clone; white-space: pre-line; }
 .transport { display: flex; gap: 10px; align-items: center; }

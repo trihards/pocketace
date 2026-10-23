@@ -5,6 +5,7 @@
 //   POST /api/render            queue a render, returns {id}
 //   GET  /api/jobs/:id          status + progress
 //   GET  /api/jobs/:id/video    the MP4 (add ?download=1 to save it)
+//   GET  /api/loudness?url=…&start=…&end=…   loudness of an excerpt (the preview levels the intro to it)
 //   POST /api/photos            import a photo from Ace's computer (raw image body)
 //   GET  /uploads/<hash>.<ext>  an imported photo; <hash>.thumb.jpg is its gallery thumbnail
 //
@@ -15,7 +16,7 @@
 // Renders run one at a time; extra requests wait in line.
 
 import http from 'node:http';
-import { spawn } from 'node:child_process';
+import { spawn, execFile } from 'node:child_process';
 import { createReadStream, createWriteStream } from 'node:fs';
 import { mkdir, rm, stat, readdir, rename, open } from 'node:fs/promises';
 import { Readable } from 'node:stream';
@@ -25,7 +26,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { lookupEpisode } from './lib/extract.js';
-import { renderVideo, probeImage } from './lib/render.js';
+import { renderVideo, probeImage, loudness } from './lib/render.js';
 import { findFFmpeg, captionsAdvice, tools } from './lib/ffmpeg.js';
 import { sniffType } from './lib/photos.js';
 import { schedule } from './public/schedule.js';
@@ -67,17 +68,42 @@ console.log(ff.ok
   ? `FFmpeg ${ff.version} at ${ff.ffmpeg} has everything needed${ff.captions ? '' : ' (no libass: captions files are off)'}.`
   : `\n  Rendering is NOT available.\n  ${ff.advice}\n`);
 
+// The standard show intro: two fixed files, replaceable. Its length is the
+// audio's, rounded to whole video frames.
+const intro = ff.ok ? await loadIntro() : null;
+console.log(intro ? `Show intro: ${intro.duration.toFixed(2)} s (public/intro/).` : 'Show intro: not available (public/intro/ needs splash.png and audio.m4a, .mp3 or .wav).');
+async function loadIntro() {
+  const dir = path.join(PUBLIC, 'intro');
+  const splash = path.join(dir, 'splash.png');
+  try {
+    const name = (await readdir(dir)).find((f) => /^audio\.(m4a|mp3|wav|aac|ogg|flac)$/i.test(f));
+    if (!name) return null;
+    const audio = path.join(dir, name);
+    const { width, height } = await probeImage(splash);
+    const out = await new Promise((ok, fail) => execFile(ff.ffprobe, ['-v', 'error', '-show_entries', 'format=duration', '-of', 'csv=p=0', audio], (err, so) => (err ? fail(err) : ok(so))));
+    const duration = Math.round(Number(out) * 30) / 30;
+    if (!(duration > 0.5)) return null;
+    return { splash, audio, width, height, duration, lufs: await loudness(audio).catch(() => null) };
+  } catch { return null; }
+}
+
 await rm(WORK, { recursive: true, force: true });
 await mkdir(path.join(WORK, 'cache'), { recursive: true });
 await mkdir(UPLOADS, { recursive: true });
+// The preview plays the intro from a plain WAV copy, which every browser can
+// play whatever format the intro file is in.
+const introWav = path.join(WORK, 'intro-preview.wav');
+if (intro) await new Promise((ok) => execFile(ff.ffmpeg, ['-v', 'error', '-y', '-i', intro.audio, '-c:a', 'pcm_s16le', '-ar', '48000', '-ac', '2', introWav], ok));
 setInterval(sweep, 10 * 60e3).unref();
 
 http.createServer(async (req, res) => {
   try {
     const url = new URL(req.url, 'http://x');
-    if (req.method === 'GET' && url.pathname === '/api/health') return send(res, 200, { render: { ok: ff.ok, ffmpeg: ff.ffmpeg, version: ff.version, missing: ff.missing, captions: ff.captions, advice: ff.advice } });
+    if (req.method === 'GET' && url.pathname === '/api/health') return send(res, 200, { render: { ok: ff.ok, ffmpeg: ff.ffmpeg, version: ff.version, missing: ff.missing, captions: ff.captions, advice: ff.advice }, intro: intro && { duration: intro.duration, lufs: intro.lufs } });
+    if (req.method === 'GET' && url.pathname === '/api/loudness') return await excerptLoudness(url, res);
     if (req.method === 'GET' && url.pathname === '/api/episode') return await episode(url, res);
     if (req.method === 'POST' && url.pathname === '/api/photos') return await importPhoto(req, res);
+    if (req.method === 'GET' && url.pathname === '/intro/preview.wav') return intro ? await sendFile(req, res, introWav, 'audio/wav') : send(res, 404, { error: 'No show intro' });
     if ((req.method === 'GET' || req.method === 'HEAD') && url.pathname.startsWith('/uploads/')) return await serveUpload(url.pathname, req, res);
     if (req.method === 'POST' && url.pathname === '/api/render') return await startRender(req, res);
     const m = url.pathname.match(/^\/api\/jobs\/([\w-]+)(\/video)?$/);
@@ -94,6 +120,21 @@ http.createServer(async (req, res) => {
     else send(res, 500, { error: err.message });
   }
 }).listen(PORT, () => console.log(`PocketAce on http://localhost:${PORT}  (work dir ${WORK}, allowed hosts: ${ALLOWED.join(', ')})`));
+
+// How loud an excerpt is, measured straight from the episode address (only
+// that stretch is read). Cached: the preview asks again whenever the excerpt
+// settles somewhere new.
+const loudCache = new Map();
+async function excerptLoudness(url, res) {
+  const u = url.searchParams.get('url') || '';
+  const start = Number(url.searchParams.get('start')), end = Number(url.searchParams.get('end'));
+  if (!allowed(u) || !(end > start) || end - start > MAX_EXCERPT) return send(res, 400, { error: 'Give an allowed audio address and an excerpt of up to 15 minutes.' });
+  const key = `${u}|${start}|${end}`;
+  if (!loudCache.has(key)) loudCache.set(key, loudness(u, { start, end }).catch(() => null));
+  const lufs = await loudCache.get(key);
+  if (lufs === null) loudCache.delete(key);
+  send(res, 200, { lufs });
+}
 
 async function episode(url, res) {
   const target = url.searchParams.get('url') || '';
@@ -122,6 +163,7 @@ async function startRender(req, res) {
     else if (!allowed(p.url)) problems.push(`Photo ${i + 1} is not on an allowed host.`);
   }
   if (body.captions && !ff.captions) problems.push(captionsAdvice(ff));
+  if (body.intro === true && !intro) problems.push('The show intro files are missing (public/intro/splash.png and audio.m4a). Untick "Include show intro" or put them back.');
   if (problems.length) return send(res, 400, { error: problems.join(' ') });
 
   // The server re-runs the same scheduler the browser used, so the render
@@ -131,7 +173,7 @@ async function startRender(req, res) {
   const id = randomUUID();
   const job = {
     id, status: 'queued', progress: 0, error: null, warnings: plan.warnings, createdAt: Date.now(), dir: path.join(WORK, id),
-    input: { ...body, start, end, photos, plan, quality: body.quality === 'draft' ? 'draft' : 'final' },
+    input: { ...body, start, end, photos, plan, quality: body.quality === 'draft' ? 'draft' : 'final', intro: body.intro === true },
   };
   jobs.set(id, job);
   queue.push(job);
@@ -157,6 +199,7 @@ async function pump() {
     }
     job.status = 'rendering';
     await renderVideo({
+      intro: input.intro ? intro : null,
       dir: job.dir, audio, photos, start: input.start, end: input.end, shots: input.plan.shots, quality: input.quality,
       guest: String(input.guest || '').slice(0, 60), subtitle: String(input.subtitle || '').slice(0, 80),
       cues: input.captions ? parseCaptions(String(input.captions)) : [],

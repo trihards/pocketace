@@ -1,6 +1,6 @@
 import { schedule, fmt, parseTime } from './schedule.js';
 import { parseCaptions, clipCues } from './captions.js';
-import { layout, motionFor, rectAt, defaultFit, transitionFor, BACKDROP, SOFT_UPSCALE, WRAP, wrapLines, W as CW, H as CH } from './look.js';
+import { layout, motionFor, rectAt, defaultFit, transitionFor, BACKDROP, SOFT_UPSCALE, WRAP, wrapLines, INTRO, splashRect, W as CW, H as CH } from './look.js';
 
 const $ = (s) => document.querySelector(s);
 const state = {
@@ -308,7 +308,13 @@ function refresh() {
   drawFrame();
   renderSummaries();
   renderButtons();
+  renderIntroOption();
   save();
+}
+function renderIntroOption() {
+  $('#intro-opt').hidden = !intro.available;
+  const len = excerptLength();
+  $('#intro-len').textContent = intro.available ? `adds ${Math.round(intro.duration)} s${len ? ` · video ${fmtShort(intro.duration * $('#intro').checked + len)}` : ''}` : '';
 }
 
 function renderGallery() {
@@ -700,7 +706,13 @@ function place(layer, f, clipSeconds) {
 function drawFrame() {
   const { start, end } = range();
   const t = previewTime();
-  $('#clock').textContent = `${fmt(t)} / ${fmt(end - start)}`;
+  // The clock counts the whole video: intro (if on) plus the excerpt.
+  const I = introLength();
+  const inIntro = introInProgress();
+  // At rest at the very start of the story, the next Play starts the intro: 0:00.
+  const v = inIntro ? Math.min(introAudio.currentTime, I) : (I && !excerptPlay && previewAt < 0.05 ? 0 : I + t);
+  $('#clock').textContent = `${fmt(v)} / ${fmt(I + Math.max(end - start, 0))}`;
+  drawIntroCard(inIntro ? introAudio.currentTime : null);
   const shots = state.plan.shots;
   const T = shots.length ? transitionFor(shots) : 0;
   layers.forEach((layer, i) => {
@@ -741,6 +753,7 @@ let lastBounds = '';
 const excerptLength = () => { const { start, end } = range(); return end > start ? end - start : 0; };
 function previewTime() { return Math.min(Math.max(previewAt, 0), excerptLength()); }
 function setPreviewTime(t) {
+  stopIntro();
   previewAt = Math.min(Math.max(t, 0), excerptLength());
   if (excerptPlay) seekAudio(range().start + previewAt);
 }
@@ -751,6 +764,8 @@ function boundsChanged(start, end) {
   const startMoved = lastBounds && lastBounds.split('|')[0] !== String(start);
   lastBounds = b;
   previewAt = 0;
+  stopIntro();
+  measureExcerpt();
   // Playing the excerpt while Start moves: carry on from the new Start.
   if (excerptPlay && startMoved && Number.isFinite(start)) seekAudio(start);
 }
@@ -773,14 +788,91 @@ function follow() {
   previewAt = Math.max(t, 0);
 }
 function setPlayButton() {
-  $('#play').textContent = excerptPlay && !audio.paused ? '❚❚ Pause excerpt' : '▶ Play excerpt';
+  $('#play').textContent = (excerptPlay && !audio.paused) || !introAudio.paused ? '❚❚ Pause excerpt' : '▶ Play excerpt';
+}
+
+// ---------- The show intro (optional, on by default) ----------
+// Fixed packaging, not part of the story: the splash plays over the intro
+// audio, crossfading into the story's first frame in its last INTRO.fade
+// seconds; then the excerpt starts at Start, as in the render. The preview
+// plays it when Play excerpt starts from the beginning of the story.
+const introAudio = $('#intro-audio');
+const intro = { available: false, duration: 0, lufs: null, gain: 0.5 };
+const introOn = () => intro.available && $('#intro').checked;
+const introLength = () => (introOn() ? intro.duration : 0);
+const introInProgress = () => introOn() && introAudio.currentTime > 0 && introAudio.currentTime < intro.duration && !introAudio.ended;
+function stopIntro() {
+  if (introAudio.currentTime === 0 && introAudio.paused) return;
+  introAudio.pause();
+  introAudio.currentTime = 0;
+  setPlayButton();
+  drawFrame();
+}
+function drawIntroCard(at) {
+  const card = $('#intro-card');
+  card.hidden = at === null;
+  if (at === null) return;
+  const img = $('#intro-splash');
+  if (img.naturalWidth) {
+    const r = splashRect(img.naturalWidth, img.naturalHeight);
+    const pct = (val, of) => `${(val / of) * 100}%`;
+    Object.assign(img.style, { left: pct(r.x, CW), top: pct(r.y, CH), width: pct(r.w, CW), height: pct(r.h, CH) });
+  }
+  card.style.background = INTRO.background;
+  const X = Math.min(INTRO.fade, intro.duration / 2);
+  card.style.opacity = String(Math.min(1, Math.max(0, (intro.duration - at) / X)));
+}
+function playIntro() {
+  audio.pause();
+  introAudio.volume = intro.gain * audio.volume; // levelled to the excerpt, like the render
+  introAudio.play().then(() => { setPlayButton(); introTick(); }).catch((err) => setStatus('#lookup-status', `The intro would not play: ${err.message}`, true));
+}
+function introTick() {
+  if (introAudio.paused) return;
+  if (introAudio.currentTime >= intro.duration - 0.02) { finishIntro(); return; }
+  drawFrame();
+  requestAnimationFrame(introTick);
+}
+function finishIntro() {
+  introAudio.pause();
+  introAudio.currentTime = 0;
+  previewAt = 0;
+  seekAudio(range().start);
+  excerptPlay = true;
+  audio.play().catch((err) => { excerptPlay = false; setPlayButton(); setStatus('#lookup-status', `Audio would not play: ${err.message}`, true); });
+  setPlayButton();
+}
+introAudio.addEventListener('ended', () => { if (introOn()) finishIntro(); });
+introAudio.addEventListener('pause', setPlayButton);
+$('#intro').addEventListener('change', () => { stopIntro(); refresh(); });
+
+// How loud the excerpt is, so the preview can play the intro at a matching
+// level (the render levels both to -16 LUFS). Measured on the server once the
+// excerpt stops changing; until then the intro plays at half volume.
+let loudTimer = null, loudKey = '';
+function measureExcerpt() {
+  const { start, end } = range();
+  const url = $('#audio-url').value.trim();
+  const key = `${url}|${start}|${end}`;
+  if (!intro.available || !url || !(end > start) || key === loudKey) return;
+  clearTimeout(loudTimer);
+  loudTimer = setTimeout(async () => {
+    loudKey = key;
+    try {
+      const r = await (await fetch(`/api/loudness?url=${encodeURIComponent(url)}&start=${start}&end=${end}`)).json();
+      if (Number.isFinite(r.lufs) && Number.isFinite(intro.lufs) && loudKey === key) intro.gain = Math.min(1, 10 ** ((r.lufs - intro.lufs) / 20));
+    } catch { loudKey = ''; }
+  }, 1500);
 }
 
 $('#play').addEventListener('click', () => {
+  if (!introAudio.paused) { introAudio.pause(); return; }
   if (excerptPlay && !audio.paused) { audio.pause(); return; }
   const { start } = range();
   const len = excerptLength();
   if (!len) return;
+  // From the very start of the story (or mid-intro), the intro comes first.
+  if (introOn() && (introInProgress() || previewAt < 0.05)) { playIntro(); return; }
   if (previewAt >= len - 0.05) previewAt = 0;
   seekAudio(start + previewAt);
   excerptPlay = true;
@@ -859,6 +951,7 @@ function writeSave() {
     guest: $('#guest').value,
     subtitle: $('#subtitle').value,
     quality: document.querySelector('input[name=quality]:checked').value,
+    intro: $('#intro').checked,
     captions: state.captions && state.captions.text.length < 1e6 ? state.captions : null,
     open: Object.fromEntries(SECTIONS.map((id) => [id, $(`#${id}`).open])),
     playhead: audio.currentTime || 0,
@@ -896,6 +989,7 @@ function restore() {
   $('#subtitle').value = p.subtitle || '';
   const q = document.querySelector(`input[name=quality][value="${p.quality}"]`);
   if (q) q.checked = true;
+  $('#intro').checked = p.intro !== false; // on unless turned off (older saves: on)
   if (p.captions?.text) setCaptions(p.captions);
   for (const id of SECTIONS) if (p.open && id in p.open) $(`#${id}`).open = !!p.open[id];
   if (p.lastRender?.id) recheckLastRender(p.lastRender);
@@ -920,8 +1014,12 @@ $('#start-over').addEventListener('click', () => {
 let renderBlocked = null;
 async function checkRenderer() {
   try {
-    const { render } = await (await fetch('/api/health')).json();
+    const { render, intro: info } = await (await fetch('/api/health')).json();
     renderBlocked = render.ok ? null : render.advice;
+    if (info) Object.assign(intro, { available: true, duration: info.duration, lufs: info.lufs });
+    renderIntroOption();
+    measureExcerpt();
+    drawFrame();
     if (render.ok && !render.captions) $('#captions-box').dataset.unavailable = '1';
   } catch { renderBlocked = null; }
   $('#render-blocked').hidden = !renderBlocked;
@@ -943,6 +1041,7 @@ function renderBody() {
     guest: $('#guest').value, subtitle: $('#subtitle').value,
     captions: state.cues.length ? state.captions.text : null,
     quality: document.querySelector('input[name=quality]:checked').value,
+    intro: introOn(),
   };
 }
 function renderSig() {
@@ -1011,7 +1110,7 @@ $('#render').addEventListener('click', async () => {
     const j = await poll(data.id);
     job.last = { id: data.id, sig, seconds: Math.round(j.renderSeconds), quality: body.quality };
     job.running = false;
-    job.readyText = `Ready: ${fmtShort(body.end - body.start)} at ${body.quality === 'final' ? '1080×1920' : '540×960'}, made in ${job.last.seconds}s.`;
+    job.readyText = `Ready: ${fmtShort(body.end - body.start + (body.intro ? intro.duration : 0))}${body.intro ? ' with the intro' : ''} at ${body.quality === 'final' ? '1080×1920' : '540×960'}, made in ${job.last.seconds}s.`;
     setStatus('#job-status', job.readyText);
     renderButtons();
     showResult();

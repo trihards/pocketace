@@ -81,6 +81,12 @@ try {
   await page.waitForFunction(() => Number.isFinite(document.querySelector('#audio').duration), null, { timeout: 90000 });
   const D = await page.$eval('#audio', (a) => a.duration);
   check(D > 600, 'episode audio loads', `${(D / 60).toFixed(1)} min`);
+  // The show intro is on by default; the excerpt checks below run without it,
+  // the intro gets its own checks after them.
+  await page.waitForSelector('#intro-opt:not([hidden])');
+  check(await page.isChecked('#intro'), 'Include show intro is on by default');
+  const I = (await (await fetch(`${base}/api/health`)).json()).intro.duration;
+  await page.uncheck('#intro');
 
   // ---- Excerpt: fields ↔ handles ----
   await page.fill('#start', '13:01');
@@ -153,6 +159,22 @@ try {
   const left = await page.evaluate(() => ({ btn: document.querySelector('#play').textContent, clock: document.querySelector('#clock').textContent, t: document.querySelector('#audio').currentTime, paused: document.querySelector('#audio').paused }));
   check(left.btn.includes('Play excerpt') && !left.paused && left.t > 999 && /^0:0[0-2]/.test(left.clock), 'seeking in the episode player keeps playing the episode and leaves the preview where it was', `${left.btn}, episode at ${left.t.toFixed(1)}s, preview ${left.clock}`);
   await page.$eval('#audio', (a) => a.pause());
+
+  // ---- The show intro in the preview ----
+  await page.check('#intro');
+  await page.fill('#start', '13:01'); await page.fill('#end', '13:04');
+  check((await page.textContent('#clock')) === `0:00.0 / 0:${(I + 3).toFixed(1).padStart(4, '0')}`, 'the clock shows intro + excerpt as the video length, from 0:00', await page.textContent('#clock'));
+  await page.$eval('#intro-audio', (a) => { a.muted = true; });
+  await page.click('#play');
+  await page.waitForFunction(() => !document.querySelector('#intro-audio').paused, null, { timeout: 10000 });
+  await page.waitForTimeout(1500);
+  const during = await page.evaluate(() => ({ card: !document.querySelector('#intro-card').hidden, episodePaused: document.querySelector('#audio').paused, clock: document.querySelector('#clock').textContent }));
+  check(during.card && during.episodePaused && /^0:0[1-2]/.test(during.clock), 'Play excerpt from the start plays the intro first, over the splash', `${during.clock}`);
+  await page.waitForFunction(() => !document.querySelector('#audio').paused, null, { timeout: 15000 });
+  const handover = await page.evaluate(() => ({ t: document.querySelector('#audio').currentTime, card: document.querySelector('#intro-card').hidden }));
+  check(near(handover.t, 781, 0.35) && handover.card, 'then the excerpt starts exactly at Start, and the splash is gone', `episode at ${handover.t.toFixed(2)}s`);
+  await page.waitForFunction(() => document.querySelector('#audio').paused, null, { timeout: 15000 });
+  check(near(await page.$eval('#audio', (a) => a.currentTime), 784, 0.3), 'and stops at End as before');
   await page.fill('#start', '13:01'); await page.fill('#end', '18:05');
 
   // ---- Photos ----
@@ -320,6 +342,7 @@ try {
   check(JSON.stringify(await storyUrls()) === JSON.stringify(finalOrder), 'story order survives a reload');
   check(JSON.stringify(await page.evaluate(() => window.pocketace.story.map((p) => p.id))) === JSON.stringify(finalIds), 'repeated copies survive a reload as separate copies');
   check(JSON.stringify(await page.evaluate(() => window.pocketace.story.map((p) => ({ fit: p.fit, fx: p.fx, fy: p.fy })))) === JSON.stringify(finalLooks), 'whole/fill choices and positions survive a reload');
+  check(await page.isChecked('#intro'), 'the intro setting survives a reload');
   check((await val('#start')) === '13:01' && (await val('#end')) === '18:05', 'excerpt survives a reload');
   check((await val('#guest')) === 'Rustee & Levi', 'edited text survives a reload');
   check(JSON.stringify(await page.$$eval('details.step', (ds) => ds.map((d) => d.open))) === '[false,true,false,true]', 'open/closed sections survive a reload');
@@ -335,7 +358,7 @@ try {
   const req = page.waitForRequest((r) => r.url().endsWith('/api/render'));
   await page.click('#render');
   const sent = JSON.parse((await req).postData());
-  check(JSON.stringify(sent.photos.map((p) => p.url)) === JSON.stringify(finalOrder) && sent.photos.every((p) => !('pin' in p)) && sent.photos[0].fit === 'fill' && sent.photos[0].fx === finalLooks[0].fx, 'render request uses the strip order and each copy\'s whole/fill choice');
+  check(JSON.stringify(sent.photos.map((p) => p.url)) === JSON.stringify(finalOrder) && sent.photos.every((p) => !('pin' in p)) && sent.photos[0].fit === 'fill' && sent.photos[0].fx === finalLooks[0].fx && sent.intro === true, 'render request uses the strip order, each copy\'s whole/fill choice, and the intro');
   check(/Making the video/.test(await page.textContent('#render')), 'progress shows in the button while it renders', await page.textContent('#render'));
   await page.waitForSelector('#download:not([hidden])', { timeout: 15 * 60e3 });
   await page.waitForTimeout(400);
@@ -354,7 +377,9 @@ try {
   await download.saveAs(mp4);
   const info = JSON.parse(execFileSync(ffprobe, ['-v', 'error', '-show_entries', 'stream=codec_type,width,height:format=duration', '-of', 'json', mp4]));
   const v = info.streams.find((s) => s.codec_type === 'video');
-  check(near(Number(info.format.duration), 304, 0.1) && v.height === (quality === 'final' ? 1920 : 960), `downloaded ${quality} MP4`, `${path.basename(mp4)}, ${v.width}×${v.height}, ${Number(info.format.duration).toFixed(2)}s`);
+  check(near(Number(info.format.duration), 304 + I, 0.1) && v.height === (quality === 'final' ? 1920 : 960), `downloaded ${quality} MP4 with the intro: excerpt + intro long`, `${path.basename(mp4)}, ${v.width}×${v.height}, ${Number(info.format.duration).toFixed(2)}s`);
+  const streams = JSON.parse(execFileSync(ffprobe, ['-v', 'error', '-show_entries', 'stream=codec_type,duration', '-of', 'json', mp4])).streams;
+  check(streams.every((st) => near(Number(st.duration), 304 + I, 0.05)), 'audio and video tracks are the same length', streams.map((st) => `${st.codec_type} ${Number(st.duration).toFixed(3)}`).join(', '));
 
   // Which photo is on screen in the middle of each shot? Compare a patch from
   // the centre of the framed photo with the centre of each source photo.
@@ -375,11 +400,26 @@ try {
   });
   const dist = (a, b) => a.reduce((acc, v, k) => acc + Math.abs(v - b[k]), 0);
   const seen = shots.map((s, i) => {
-    const f = patch(mp4, (s.start + s.end) / 2, `crop=iw*${spot.w / CW}:ih*${spot.h / CH}:iw*${spot.x / CW}:ih*${spot.y / CH}`);
+    const f = patch(mp4, I + (s.start + s.end) / 2, `crop=iw*${spot.w / CW}:ih*${spot.h / CH}:iw*${spot.x / CW}:ih*${spot.y / CH}`);
     const d = expected.map((e) => dist(e, f));
     return d[i] <= Math.min(...d) ? i : d.indexOf(Math.min(...d)); // ties (repeats) count as a match
   });
   check(seen.every((idx, i) => idx === i), 'each shot in the MP4 shows the expected part of the photo in that strip position (fills, repeats and imports included)', `matched ${JSON.stringify(seen)}`);
+
+  // ---- The same story without the intro ----
+  await page.uncheck('#intro');
+  check((await page.textContent('#render')) === 'Make the video', 'turning the intro off asks for a new video');
+  await page.click('#render');
+  await page.waitForSelector('#download:not([hidden])', { timeout: 15 * 60e3 });
+  const [download2] = await Promise.all([page.waitForEvent('download'), page.click('#download')]);
+  const mp4b = path.join(work, `no-intro-${await download2.suggestedFilename()}`);
+  await download2.saveAs(mp4b);
+  check(near(Number(JSON.parse(execFileSync(ffprobe, ['-v', 'error', '-show_entries', 'format=duration', '-of', 'json', mp4b])).format.duration), 304, 0.05), 'without the intro the video is exactly the excerpt long');
+  // The story is the same in both, just I seconds later with the intro: compare frames.
+  const grey = (f, t) => execFileSync(ffmpeg, ['-v', 'fatal', '-ss', String(t), '-i', f, '-frames:v', '1', '-vf', 'scale=27:48,crop=27:34:0:0,format=gray', '-f', 'rawvideo', '-']);
+  const offsets = [5, 60, 150, 250].map((t) => dist(grey(mp4, I + t), grey(mp4b, t)) / (27 * 34));
+  check(offsets.every((d) => d < 4), 'the story in the intro video is the no-intro story, shifted by exactly the intro', offsets.map((d) => d.toFixed(1)).join(', '));
+  await page.check('#intro');
 
   // Changing anything puts "Make the video" back in front, and keeps the earlier file reachable.
   await page.$eval('#step-episode', (d) => { d.open = true; });

@@ -115,3 +115,16 @@ export function transitionFor(shots, fps = 30) {
   const minLen = Math.min(...shots.map((s) => s.end - s.start));
   return Math.max(2 / fps, Math.round(Math.min(TRANSITION, minLen / 2) * fps) / fps);
 }
+
+// The standard show intro (optional, on by default): the splash artwork,
+// whole and centred on the show's purple, for as long as the intro audio
+// lasts, then a crossfade into the first frame of the story. The files are
+// public/intro/splash.png and public/intro/audio.m4a; replace them to change
+// the intro (its length follows the audio). The story starts exactly when the
+// intro ends: the crossfade sits in the intro's last `fade` seconds.
+export const INTRO = { background: '#250032', fade: 0.5 };
+export function splashRect(width, height) {
+  const s = Math.min(W / width, H / height);
+  const w = width * s, h = height * s;
+  return { x: (W - w) / 2, y: (H - h) / 2, w, h };
+}
