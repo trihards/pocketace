@@ -144,7 +144,7 @@ body.dragging, body.dragging * { cursor: grabbing !important; }
 
 .preview-col { position: sticky; top: 12px; align-self: start; display: grid; gap: 12px; } /* no scrolling of its own; app.js pins tall columns by their bottom */
 /* Phone sized to the window height so play and the render buttons stay in view beside it. */
-.phone { background: #000; border-radius: 22px; padding: 8px; border: 1px solid var(--line); width: min(100%, calc((100vh - 300px) * 9 / 16)); min-width: 200px; justify-self: center; }
+.phone { background: #000; border-radius: 22px; padding: 8px; border: 1px solid var(--line); width: min(100%, calc((100vh - 332px) * 9 / 16)); min-width: 200px; justify-self: center; }
 .result-video { display: block; width: 100%; aspect-ratio: 9 / 16; border-radius: 14px; background: #000; }
 .result-bar { display: flex; justify-content: space-between; align-items: center; gap: 10px; color: var(--gold); font-weight: 600; }
 .blocked { margin: 0; padding: 10px 12px; border: 1px solid var(--bad); border-radius: 8px; color: var(--bad); font-size: 14px; }
